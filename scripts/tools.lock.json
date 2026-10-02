@@ -1,0 +1,14 @@
+{
+  "go": {
+    "version": "1.26.8",
+    "url": "https://go.dev/dl/go1.26.8.windows-amd64.zip",
+    "sha256": "b92c3b2adae85a11ba71fe7216daf0d84e82af4c8ab6c5625807f28622043a59",
+    "source_of_hash": "go.dev/dl/?mode=json"
+  },
+  "sing-box": {
+    "version": "1.13.16",
+    "url": "https://github.com/SagerNet/sing-box/releases/download/v1.13.16/sing-box-1.13.16-windows-amd64.zip",
+    "sha256": "6cbf90ec4ee87122ffce09b73928fb31e763bc1c75a119f79c61d24734c78807",
+    "source_of_hash": "MagicProxy third-party/sing-box/SHA256-windows-amd64 @ baf56b5 (must match the zip)"
+  }
+}
