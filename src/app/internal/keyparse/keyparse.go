@@ -38,6 +38,11 @@ func Parse(raw string) (*config.Profile, *Error) {
 	if text == "" {
 		return nil, fail("empty", "Вставьте ключ из Telegram.")
 	}
+	// The part after '#' is only a display name given by the provider ("Server 1", in any
+	// language). It may contain spaces and plays no role in the connection, so drop it first.
+	if i := strings.Index(text, "#"); i >= 0 {
+		text = text[:i]
+	}
 	if strings.IndexFunc(text, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 {
 		return nil, fail("multi", "Вставьте один ключ целиком, без пробелов и переносов строк.")
 	}

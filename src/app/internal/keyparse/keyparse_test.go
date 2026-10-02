@@ -28,10 +28,21 @@ func TestAcceptsGoodKey(t *testing.T) {
 	}
 }
 
+func TestFragmentNameMaySpaceAndBeCyrillic(t *testing.T) {
+	in := "vless://" + testUUID + "@192.0.2.10:443?" + good + "#Имя сервера с пробелами 1"
+	if _, err := Parse(in); err != nil {
+		t.Fatalf("rejected a key whose only spaces are in the #name: %v", err)
+	}
+	if _, err := Parse(strings.Replace(in, "&sid=abcd1234", "&sid=abcd 1234", 1)); err == nil || err.Code != "multi" {
+		t.Fatalf("space inside the real part must still be rejected, got %v", err)
+	}
+}
+
 func TestRejects(t *testing.T) {
 	cases := []struct{ name, in, code string }{
 		{"empty", "", "empty"},
-		{"whitespace", key(good) + " extra", "multi"},
+		{"whitespace before #", strings.Replace(key(good), "#synthetic", " extra#synthetic", 1), "multi"},
+		{"second key after a space, no #", "vless://" + testUUID + "@192.0.2.10:443?" + good + " vless://x", "multi"},
 		{"other scheme", "vmess://abcdef", "scheme"},
 		{"no reality", key(strings.Replace(good, "security=reality", "security=tls", 1)), "not-reality"},
 		{"no flow", key(strings.Replace(good, "flow=xtls-rprx-vision&", "", 1)), "flow"},
