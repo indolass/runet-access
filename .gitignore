@@ -1,0 +1,21 @@
+# Local dependencies, caches, browser state and secrets
+/.local/
+/dist/
+/node_modules/
+.env
+.env.*
+!.env.example
+*.log
+*.exe
+*.exe~
+*.dll
+*.msi
+*.zip
+*.7z
+*.pfx
+*.p12
+*.key
+*.pem
+*.ovpn
+*.local.json
+*.secret.*
