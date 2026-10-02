@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -62,6 +63,11 @@ func (a *app) routes(srvPort int) http.Handler {
 			ExpectedCountry: "RU", TimeoutMs: 8000,
 			Proxied: []probeCfg{{"country.is", "https://api.country.is/"}, {"ipwho.is", "https://ipwho.is/"}},
 			Direct:  probeCfg{"ipify", "/api/direct-ip"},
+		}
+		// Test only: lets a foreign test server be checked end to end. The check itself stays real
+		// (the exit country must equal this value, otherwise the connection is refused); the default is RU.
+		if cc := strings.ToUpper(os.Getenv("RUNET_EXPECTED_COUNTRY")); len(cc) == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z' {
+			c.ExpectedCountry = cc
 		}
 		if a.probeOverride != "" { // test only
 			c.Proxied = []probeCfg{{"country.is", a.probeOverride}}
