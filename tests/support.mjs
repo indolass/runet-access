@@ -1,7 +1,7 @@
 // Shared test support: synthetic VLESS+Reality server, country-check mock, test-only extension copy.
 // Everything is synthetic; no real keys. Files live under the repo-local TEMP.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, cpSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import http from "node:http";
 import net from "node:net";
@@ -59,24 +59,4 @@ export async function startSyntheticServer(mockPort) {
     stop() { proc.kill(); },
     cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} },
   };
-}
-
-/** Test-only copy of the extension whose "proxied" probe points at the mock host (http, via the tunnel). */
-export function buildTestExtension() {
-  const src = join(root, "dist", "runet-access", "extension");
-  const dst = join(process.env.TEMP, "test-extension");
-  if (!dst.startsWith(root)) throw new Error("test extension must live under the repo");
-  rmSync(dst, { recursive: true, force: true });
-  cpSync(src, dst, { recursive: true });
-  const cfgPath = join(dst, "src", "gov", "gov-config.js");
-  let cfg = readFileSync(cfgPath, "utf8");
-  const re = /proxied: \[[\s\S]*?\n  \],/;
-  if (!re.test(cfg)) throw new Error("cannot patch gov-config.js");
-  cfg = cfg.replace(re, `proxied: [\n    { id: "country.is", url: "http://${MOCK_HOST}/", host: "${MOCK_HOST}" },\n  ],`);
-  writeFileSync(cfgPath, cfg);
-  const mPath = join(dst, "manifest.json");
-  const m = JSON.parse(readFileSync(mPath, "utf8"));
-  m.host_permissions = [`http://${MOCK_HOST}/*`, "https://api.ipify.org/*", "https://example.com/*"];
-  writeFileSync(mPath, JSON.stringify(m, null, 2));
-  return dst;
 }

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Runet Access</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Runet Access</h1>
+        <span class="proto">прототип</span>
+      </header>
+      <p class="lead">Это окно браузера целиком работает через ваш ключ. Обычный браузер и другие программы не затрагиваются.</p>
+
+      <section id="keyBlock">
+        <label for="keyInput" id="keyLabel">Ключ из Telegram</label>
+        <textarea id="keyInput" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"
+          placeholder="Вставьте сюда ключ, который начинается с vless://"></textarea>
+        <label class="check" id="rememberRow"><input type="checkbox" id="remember" checked />
+          Запомнить ключ на этом компьютере (хранится зашифрованным средствами Windows)</label>
+        <div id="keySaved" class="saved hidden">
+          <span>Ключ сохранён на этом компьютере.</span>
+          <button id="keyReplace" class="link" type="button">Заменить</button>
+          <button id="keyForget" class="link" type="button">Удалить</button>
+        </div>
+        <p id="keyError" class="error hidden" role="alert"></p>
+      </section>
+
+      <button id="mainBtn" class="primary" type="button" disabled>Подключить</button>
+
+      <section aria-live="polite">
+        <div id="statusLine" class="status status--idle">Загрузка…</div>
+        <ul id="results" class="results hidden">
+          <li id="resExit"><span class="k">Выход этого окна</span><span class="v"></span></li>
+          <li id="resDirect"><span class="k">Обычное соединение (вне окна)</span><span class="v"></span></li>
+        </ul>
+        <p id="hint" class="hint hidden"></p>
+      </section>
+
+      <section id="openBlock">
+        <label for="siteUrl">Адрес сайта</label>
+        <div class="row">
+          <input id="siteUrl" type="text" spellcheck="false" placeholder="https://" />
+          <button id="openBtn" class="secondary" type="button" disabled>Открыть</button>
+        </div>
+        <p class="hint">Сайт откроется в новой вкладке этого окна. Вход, подпись и отправку отчёта вы выполняете сами.
+          Эту вкладку не закрывайте: в ней видно состояние подключения.</p>
+        <button id="recheckBtn" class="secondary hidden" type="button">Проверить выход ещё раз</button>
+      </section>
+
+      <footer>
+        <p>Закройте окно браузера, когда закончите: подключение завершится само.</p>
+      </footer>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
