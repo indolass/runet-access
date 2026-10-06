@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"runetaccess/internal/config"
+	"runetaccess/internal/ssbridge"
 )
 
 // Shadowsocks keys (ss://).
@@ -19,11 +20,16 @@ import (
 //	ss://BASE64(method:password@host:port)[#name]                        the legacy form
 //
 // The set of ciphers is exactly what the pinned sing-box core can use securely: AEAD and AEAD-2022.
-// The legacy stream ciphers and "none" are refused with their own message. A key that carries a plugin
-// or an Outline "prefix" is refused with an exact message: nothing is silently dropped (the pinned
-// sing-box 1.13.16 cannot do the Outline prefix, and the plugins are not enabled in this product).
-// Messages never contain the server, the password or any other part of the key; the cipher name and
-// the NAME of an unexpected parameter are not secrets.
+// The legacy stream ciphers and "none" are refused with their own message. A key that carries a plugin is
+// refused with an exact message: nothing is silently dropped (the plugins are not enabled in this product).
+//
+// The Outline "prefix" (https://developer.getoutline.org/vpn/advanced/prefixing/) is the first bytes of the
+// Shadowsocks salt. The pinned sing-box 1.13.16 cannot set them, so a key with a prefix is carried out by
+// package ssbridge (the Outline SDK) and the profile gets Prefix; it is possible only with the ciphers the
+// SDK has (chacha20-ietf-poly1305, aes-128/192/256-gcm). The query value is decoded exactly as the Outline
+// client decodes it: percent-decoding, then each character (code 0..255) is one byte.
+// Messages never contain the server, the password, the prefix or any other part of the key; the cipher name
+// and the NAME of an unexpected parameter are not secrets.
 
 // ssCiphers: what the product accepts. Value = key length in bytes for the 2022 family, 0 otherwise.
 var ssCiphers = map[string]int{
@@ -44,8 +50,23 @@ var ssLegacy = map[string]bool{
 	"rc4": true, "chacha20": true, "salsa20": true, "bf-cfb": true, "table": true,
 }
 
-// PrefixMsg is the exact explanation for an Outline key that asks for a connection prefix.
-const PrefixMsg = "Ключ использует «префикс» Outline (маскировка начала соединения). Встроенное ядро sing-box 1.13 его не поддерживает, поэтому такой ключ пока нельзя использовать."
+// DecodePrefix turns the text of a prefix (already percent-decoded by the URL, JSON or YAML reader) into the
+// bytes Outline uses: each character is one byte, so only the code points 0..255 are allowed. A text that is
+// not valid UTF-8 (a lone %A8, say) yields U+FFFD and is refused, as the Outline client refuses it.
+func DecodePrefix(s string) ([]byte, *Error) {
+	if s == "" {
+		return nil, nil
+	}
+	rs := []rune(s)
+	out := make([]byte, len(rs))
+	for i, r := range rs {
+		if r < 0 || r > 0xFF {
+			return nil, fail("ss-prefix-bad", "Префикс в ключе записан неверно: допустимы только символы с кодами от 0 до 255, как требует Outline.")
+		}
+		out[i] = byte(r)
+	}
+	return out, nil
+}
 
 // SafeName shortens a parameter or cipher name for a message: only plain characters survive.
 func SafeName(s string) string {
@@ -128,18 +149,19 @@ func parseShadowsocks(text string) (*config.Profile, *Error) {
 		return nil, fail("server", "В ключе нет адреса сервера или порта.")
 	}
 
-	if qerr := checkSSQuery(query); qerr != nil {
+	prefix, qerr := checkSSQuery(query)
+	if qerr != nil {
 		return nil, qerr
 	}
-	return ShadowsocksProfile(host, port, method, password)
+	return ShadowsocksProfile(host, port, method, password, prefix)
 }
 
 // Fail builds an Error of the right class for other packages (dynkey).
 func Fail(code, msg string) *Error { return fail(code, msg) }
 
-// ShadowsocksProfile validates the four parts of a Shadowsocks key, wherever they came from (an ss:// link,
-// the JSON or the YAML of a dynamic key), and returns the profile for the core.
-func ShadowsocksProfile(host string, port int, method, password string) (*config.Profile, *Error) {
+// ShadowsocksProfile validates the parts of a Shadowsocks key, wherever they came from (an ss:// link,
+// the JSON or the YAML of a dynamic key), and returns the profile. prefix is the Outline prefix (nil = none).
+func ShadowsocksProfile(host string, port int, method, password string, prefix []byte) (*config.Profile, *Error) {
 	method = strings.ToLower(strings.TrimSpace(method))
 	if host == "" || strings.ContainsAny(host, " /\\@\t\r\n") || port < 1 || port > 65535 {
 		return nil, fail("server", "В ключе нет адреса сервера или порта.")
@@ -150,28 +172,50 @@ func ShadowsocksProfile(host string, port int, method, password string) (*config
 	if e := checkSSCipher(method, password); e != nil {
 		return nil, e
 	}
+	if len(prefix) > 0 {
+		switch ssbridge.CheckPrefix(method, prefix) {
+		case "cipher":
+			return nil, fail("ss-prefix-cipher", "Префикс Outline работает только с шифрами chacha20-ietf-poly1305 и aes-128/192/256-gcm. Шифр «"+SafeName(method)+"» с префиксом не поддерживается.")
+		case "long":
+			return nil, fail("ss-prefix-long", "Префикс в ключе слишком длинный: допускается не больше "+strconv.Itoa(maxPrefixFor(method))+" байт, чтобы в соединении оставалась случайная часть.")
+		}
+	}
 	return &config.Profile{
 		ID: "runet-access-key", Name: ProfileName, Type: "shadowsocks",
-		Server: host, Port: port, Method: method, Password: password,
+		Server: host, Port: port, Method: method, Password: password, Prefix: append([]byte(nil), prefix...),
 	}, nil
 }
 
-// checkSSQuery accepts only Outline's own marker; everything else is named and refused.
-func checkSSQuery(query string) *Error {
+// maxPrefixFor is the longest prefix allowed with the cipher (for the message only).
+func maxPrefixFor(method string) int {
+	n := ssbridge.MaxPrefix
+	if salt, ok := ssbridge.CipherInfo(method); ok && salt-8 < n {
+		n = salt - 8
+	}
+	return n
+}
+
+// checkSSQuery accepts Outline's own marker and its prefix; everything else is named and refused.
+func checkSSQuery(query string) ([]byte, *Error) {
 	if query == "" {
-		return nil
+		return nil, nil
 	}
 	vals, err := url.ParseQuery(query)
 	if err != nil {
-		return fail("broken", "Ключ повреждён или скопирован не целиком. Скопируйте его из бота ещё раз.")
+		return nil, fail("broken", "Ключ повреждён или скопирован не целиком. Скопируйте его из бота ещё раз.")
 	}
+	var prefix []byte
 	for k, v := range vals {
 		switch strings.ToLower(k) {
 		case "outline":
 			// Outline marks its own keys with outline=1; it changes nothing for the connection
 		case "prefix":
-			if len(v) > 0 && v[0] != "" {
-				return fail("ss-prefix", PrefixMsg)
+			if len(v) > 0 {
+				p, perr := DecodePrefix(v[0])
+				if perr != nil {
+					return nil, perr
+				}
+				prefix = p
 			}
 		case "plugin":
 			name := ""
@@ -181,12 +225,12 @@ func checkSSQuery(query string) *Error {
 					name = name[:j]
 				}
 			}
-			return fail("ss-plugin", "Ключ требует плагин Shadowsocks «"+SafeName(name)+"»: плагины не поддерживаются.")
+			return nil, fail("ss-plugin", "Ключ требует плагин Shadowsocks «"+SafeName(name)+"»: плагины не поддерживаются.")
 		default:
-			return fail("ss-param", "Ключ содержит параметр «"+SafeName(k)+"», который не поддерживается.")
+			return nil, fail("ss-param", "Ключ содержит параметр «"+SafeName(k)+"», который не поддерживается.")
 		}
 	}
-	return nil
+	return prefix, nil
 }
 
 func checkSSCipher(method, password string) *Error {

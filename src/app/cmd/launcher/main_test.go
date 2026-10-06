@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"runetaccess/internal/config"
 	"runetaccess/internal/keyparse"
 )
 
@@ -292,5 +295,34 @@ func TestChromeInAPathWithSpacesAndCyrillic(t *testing.T) {
 	// the same path as the registry stores it: sometimes in quotes
 	if got := firstChrome([]string{`"` + exe + `"`}); got != exe {
 		t.Fatalf("quoted: got %q", got)
+	}
+}
+
+func TestPrefixKeyIsPlannedForTheBridgeAndNeverBuiltAsPlainShadowsocks(t *testing.T) {
+	ctx := context.Background()
+	user := base64.RawURLEncoding.EncodeToString([]byte("chacha20-ietf-poly1305:secret"))
+	plain, err := buildPlan(ctx, "ss://"+user+"@203.0.113.9:8388/?outline=1", 1080)
+	if err != nil || plain.cfg == nil || len(plain.p.Prefix) != 0 {
+		t.Fatalf("a key without a prefix goes straight to the core: %+v %v", plain, err)
+	}
+	pre, err := buildPlan(ctx, "ss://"+user+"@203.0.113.9:8388/?prefix=POST%20", 1080)
+	if err != nil || pre.cfg != nil || string(pre.p.Prefix) != "POST " || pre.addr != "203.0.113.9:8388" {
+		t.Fatalf("a prefix key waits for the bridge: %+v %v", pre, err)
+	}
+	// the core config for it points ONLY at the loopback bridge, with its login, and holds no part of the key
+	cfg, cerr := config.Build(bridgeProfile(45678, "u1", "p1"), config.Inbound{Listen: "127.0.0.1", Port: 1080}, config.Routing{Final: "proxy"}, "warn")
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+	s := string(cfg)
+	for _, want := range []string{`"type": "socks"`, `"server": "127.0.0.1"`, `"server_port": 45678`, `"username": "u1"`, `"password": "p1"`, `"final": "proxy"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("bridge config lacks %s", want)
+		}
+	}
+	for _, bad := range []string{"203.0.113.9", "secret", "shadowsocks", "POST"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("the core config must not hold %q", bad)
+		}
 	}
 }

@@ -70,6 +70,65 @@ func TestShadowsocksReachesTheCoreConfig(t *testing.T) {
 	}
 }
 
+func TestShadowsocksPrefixIsDecodedLikeOutlineDoes(t *testing.T) {
+	good := "ss://" + b64url("chacha20-ietf-poly1305:"+ssPass) + "@" + ssHost + ":443/"
+	all := func(from, to int) []byte { // the bytes from..to as a prefix
+		var b []byte
+		for i := from; i <= to; i++ {
+			b = append(b, byte(i))
+		}
+		return b
+	}
+	// A character 0..255 is one byte; above 127 the URL carries it as its UTF-8 form (what encodeURIComponent writes).
+	utf8q := func(b []byte) string {
+		var sb strings.Builder
+		for _, c := range b {
+			if c < 0x80 {
+				sb.WriteString("%" + strings.ToUpper(string("0123456789abcdef"[c>>4])+string("0123456789abcdef"[c&15])))
+			} else {
+				sb.WriteString(url.QueryEscape(string(rune(c))))
+			}
+		}
+		return sb.String()
+	}
+	cases := []struct {
+		name, query string
+		want        []byte
+	}{
+		{"the example of the Outline guide", "outline=1&prefix=%16%03%01%00%C2%A8%01%01", []byte{0x16, 0x03, 0x01, 0x00, 0xA8, 0x01, 0x01}},
+		{"printable text", "prefix=POST%20", []byte("POST ")},
+		{"HTTP request start with CRLF", "prefix=GET%20%2F%20HTTP%2F1.1%0D%0A", []byte("GET / HTTP/1.1\r\n")},
+		{"a zero byte in the middle", "prefix=A%00B", []byte{'A', 0, 'B'}},
+		{"bytes 0x80..0x8F", "prefix=" + utf8q(all(0x80, 0x8F)), all(0x80, 0x8F)},
+		{"bytes 0xF0..0xFF", "prefix=" + utf8q(all(0xF0, 0xFF)), all(0xF0, 0xFF)},
+		{"bytes 0x00..0x0F", "prefix=" + utf8q(all(0x00, 0x0F)), all(0x00, 0x0F)},
+		{"empty prefix means none", "prefix=", nil},
+		{"no prefix", "outline=1", nil},
+	}
+	for _, c := range cases {
+		p := mustSS(t, good+"?"+c.query)
+		if string(p.Prefix) != string(c.want) || (c.want == nil) != (len(p.Prefix) == 0) {
+			t.Errorf("%s: got % x, want % x", c.name, p.Prefix, c.want)
+		}
+		if p.Method != "chacha20-ietf-poly1305" || p.Password != ssPass {
+			t.Errorf("%s: the rest of the key changed", c.name)
+		}
+	}
+	// the legacy single-blob form takes the query too
+	p := mustSS(t, "ss://"+base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:secret@"+ssHost+":8443"))+"?prefix=POST%20")
+	if string(p.Prefix) != "POST " {
+		t.Errorf("legacy form: %q", p.Prefix)
+	}
+	// 16 bytes are the most Outline recommends and are accepted with a 32-byte salt
+	if p := mustSS(t, good+"?prefix="+strings.Repeat("A", 16)); len(p.Prefix) != 16 {
+		t.Errorf("16 bytes: %d", len(p.Prefix))
+	}
+	// the profile is never turned into a core config silently without its prefix
+	if _, err := config.Build(mustSS(t, good+"?prefix=POST%20"), config.Inbound{Port: 1080}, config.Routing{Final: "proxy"}, "warn"); err == nil {
+		t.Error("a prefix profile must not be built into a plain Shadowsocks outbound")
+	}
+}
+
 func TestShadowsocksRefusals(t *testing.T) {
 	good := b64url("chacha20-ietf-poly1305:" + ssPass)
 	key2022 := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
@@ -94,7 +153,12 @@ func TestShadowsocksRefusals(t *testing.T) {
 		{"2022 key of the wrong length", "ss://2022-blake3-aes-256-gcm:" + url.PathEscape(key2022) + "@" + ssHost + ":1", "key", ClassKey},
 		{"2022 key that is not base64", "ss://2022-blake3-aes-128-gcm:not-a-key@" + ssHost + ":1", "key", ClassKey},
 		{"plugin", "ss://" + good + "@" + ssHost + ":1/?plugin=" + url.QueryEscape("obfs-local;obfs=http;obfs-host=SECRETHOST"), "ss-plugin", ClassUnsupported},
-		{"Outline prefix", "ss://" + good + "@" + ssHost + ":1/?prefix=" + url.QueryEscape("\x16\x03\x01\x00"), "ss-prefix", ClassUnsupported},
+		{"prefix with a character above 255 (euro sign)", "ss://" + good + "@" + ssHost + ":1/?prefix=%E2%82%AC", "ss-prefix-bad", ClassKey},
+		{"prefix that is a lone byte, not UTF-8 (%A8)", "ss://" + good + "@" + ssHost + ":1/?prefix=%16%03%A8", "ss-prefix-bad", ClassKey},
+		{"prefix of 17 bytes", "ss://" + good + "@" + ssHost + ":1/?prefix=" + strings.Repeat("A", 17), "ss-prefix-long", ClassUnsupported},
+		{"prefix leaving too little random salt (aes-128-gcm, 9 bytes)", "ss://" + b64url("aes-128-gcm:secret") + "@" + ssHost + ":1/?prefix=" + strings.Repeat("A", 9), "ss-prefix-long", ClassUnsupported},
+		{"prefix with an AEAD-2022 cipher", "ss://2022-blake3-aes-128-gcm:" + url.PathEscape(key2022) + "@" + ssHost + ":1/?prefix=POST%20", "ss-prefix-cipher", ClassUnsupported},
+		{"prefix with xchacha20", "ss://" + b64url("xchacha20-ietf-poly1305:secret") + "@" + ssHost + ":1/?prefix=POST%20", "ss-prefix-cipher", ClassUnsupported},
 		{"unknown parameter", "ss://" + good + "@" + ssHost + ":1/?udp-over-tcp=1", "ss-param", ClassUnsupported},
 		{"dynamic key is not a static one", "ssconf://keys.public-test.org/path?x=1", "dynamic", ClassKey},
 	}

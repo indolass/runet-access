@@ -4,7 +4,7 @@
 //   - vless:// Reality over plain TCP with flow xtls-rprx-vision (the original scenario);
 //   - vless:// TLS over WebSocket (what the HLVPN support actually issued for "Рунет"; verified to work
 //     in an independent Xray client);
-//   - ss:// Shadowsocks (SIP002, the legacy base64 form and Outline static keys), see ss.go.
+//   - ss:// Shadowsocks (SIP002, the legacy base64 form and Outline static keys, with the Outline prefix), see ss.go.
 //
 // ssconf:// (Outline dynamic keys) is recognised here (IsDynamic) but fetched and interpreted by package
 // dynkey: this package never touches the network.
@@ -47,7 +47,7 @@ func (e *Error) Error() string { return e.Message }
 // Codes that mean "understood, but not supported".
 var unsupportedCodes = map[string]bool{
 	"unsupported": true, "transport": true, "encryption": true, "insecure": true, "packet": true,
-	"ss-cipher": true, "ss-legacy-cipher": true, "ss-plugin": true, "ss-prefix": true, "ss-param": true,
+	"ss-cipher": true, "ss-legacy-cipher": true, "ss-plugin": true, "ss-prefix-cipher": true, "ss-prefix-long": true, "ss-param": true,
 	"dyn-yaml": true, "dyn-format": true, "dyn-param": true, "dyn-transport": true,
 }
 

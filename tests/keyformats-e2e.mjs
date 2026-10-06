@@ -225,7 +225,7 @@ try {
   // ---------------------------------------------------------------------------------------------------- refusals in a replacement
   const attempts = [
     ["settings page answers 404", () => routes.set("/bad", serve("no", 404, "text/plain")), "/bad", ["Не удалось загрузить настройки ключа", "кодом 404"]],
-    ["settings with an Outline prefix", () => routes.set("/prefix", serve(ssA.json({ prefix: "POST " }))), "/prefix", ["Настройки ключа содержат неподдерживаемые параметры", "префикс"]],
+    ["settings with a prefix that is not one byte per character (EURO SIGN)", () => routes.set("/prefix", serve(ssA.json({ prefix: String.fromCharCode(0x20ac) }))), "/prefix", ["Префикс в ключе записан неверно"]],
     ["settings with a plugin", () => routes.set("/plugin", serve(ssA.json({ plugin: "v2ray-plugin", plugin_opts: "tls;host=x" }))), "/plugin", ["неподдерживаемые параметры", "v2ray-plugin"]],
     ["settings with an unknown parameter", () => routes.set("/extra", serve(ssA.json({ routing: { final: "direct" } }))), "/extra", ["неподдерживаемые параметры", "routing"]],
     ["settings with an obsolete cipher", () => routes.set("/rc4", serve(JSON.stringify({ server: "127.0.0.1", server_port: ssA.port, password: "x", method: "rc4-md5" }))), "/rc4", ["неподдерживаемые параметры", "rc4-md5"]],
@@ -259,11 +259,11 @@ try {
       await click(control, "replaceCancel");
     }
   });
-  await step("static ss:// refused in a replacement: prefix, plugin, obsolete cipher, wrong key length, unknown parameter", async () => {
+  await step("static ss:// refused in a replacement: a bad prefix, plugin, obsolete cipher, wrong key length, unknown parameter", async () => {
     const b64 = (x) => Buffer.from(x).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const ui = b64("chacha20-ietf-poly1305:" + ssA.password);
     for (const [key, mention] of [
-      [`ss://${ui}@127.0.0.1:${ssA.port}/?prefix=%16%03%01%00`, "префикс"], [`ss://${ui}@127.0.0.1:${ssA.port}/?plugin=obfs-local%3Bobfs%3Dhttp`, "obfs-local"],
+      [`ss://${ui}@127.0.0.1:${ssA.port}/?prefix=%E2%82%AC`, "Префикс"], [`ss://${ui}@127.0.0.1:${ssA.port}/?plugin=obfs-local%3Bobfs%3Dhttp`, "obfs-local"],
       [`ss://${b64("rc4-md5:x")}@127.0.0.1:${ssA.port}`, "rc4-md5"], [`ss://2022-blake3-aes-256-gcm:${encodeURIComponent(Buffer.from("short").toString("base64"))}@127.0.0.1:1`, "байт"],
       [`ss://${ui}@127.0.0.1:${ssA.port}/?udp-over-tcp=1`, "udp-over-tcp"]]) {
       const h0 = sha(keyFile);

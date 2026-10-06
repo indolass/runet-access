@@ -104,3 +104,41 @@ export function tlsPair(name = "localhost") {
   const i = out.indexOf("-----BEGIN CERTIFICATE-----");
   return { key: out.slice(0, i).trim() + "\n", cert: out.slice(i).trim() + "\n" };
 }
+
+/**
+ * A middlebox in front of a real Shadowsocks server: a connection is passed on ONLY when its first bytes are `prefix`
+ * (this is what an Outline prefix exists for); anything else is dropped at once. It records the first 32 bytes
+ * (the salt) of every connection, so the test can see what really went over the wire.
+ * `port` can be given to start the same front again on its old port.
+ */
+export async function startPrefixFront(backendPort, prefix, port) {
+  const stats = { served: 0, rejected: 0, probes: 0, heads: [], open: new Set() };
+  const server = net.createServer((c) => {
+    stats.open.add(c);
+    c.on("close", () => stats.open.delete(c));
+    c.on("error", () => {});
+    let buf = Buffer.alloc(0), decided = false;
+    const decide = () => {
+      decided = true; c.off("data", onData); c.pause();
+      if (buf.length === 0) { stats.probes++; c.destroy(); return; } // a bare port probe (the launcher checks that the port answers): no data, not a verdict
+      stats.heads.push(Buffer.from(buf.subarray(0, 32)));
+      if (!buf.subarray(0, prefix.length).equals(prefix)) { stats.rejected++; c.destroy(); return; }
+      stats.served++;
+      const up = net.connect(backendPort, "127.0.0.1", () => { up.write(buf); c.pipe(up); up.pipe(c); });
+      stats.open.add(up); up.on("close", () => { stats.open.delete(up); c.destroy(); }); up.on("error", () => c.destroy());
+      c.on("close", () => up.destroy());
+    };
+    const onData = (d) => { buf = Buffer.concat([buf, d]); if (buf.length >= 32) decide(); };
+    c.on("data", onData);
+    c.on("end", () => { if (!decided) decide(); });
+  });
+  await new Promise((r) => server.listen(port || 0, "127.0.0.1", r));
+  const p = server.address().port;
+  return {
+    port: p, stats, prefix,
+    stop() { server.close(); for (const c of stats.open) c.destroy(); },
+  };
+}
+
+/** Outline writes a prefix into a URL as the UTF-8 form of its characters (encodeURIComponent of the JSON string). */
+export const prefixQuery = (bytes) => encodeURIComponent(String.fromCharCode(...bytes));

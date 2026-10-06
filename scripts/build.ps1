@@ -13,6 +13,19 @@ if (-not (Test-Path (Join-Path $L 'tools\go\bin\go.exe')) -or -not (Test-Path (J
 # 2. checks before building
 Push-Location (Join-Path $RunetRoot 'src\app')
 try {
+  # the third-party Go code linked into the program is exactly the pinned set (scripts\tools.lock.json), with the pinned hashes
+  $pins = (Get-Content (Join-Path $PSScriptRoot 'tools.lock.json') -Raw | ConvertFrom-Json).'go-modules'
+  $sumLines = Get-Content go.sum
+  $pinned = @()
+  foreach ($m in $pins.PSObject.Properties) {
+    if ($m.Name -eq 'note') { continue }
+    $pinned += $m.Name
+    if ($sumLines -notcontains "$($m.Name) $($m.Value.version) h1:$($m.Value.h1)") { throw "go.sum does not hold the pinned hash of $($m.Name) $($m.Value.version)" }
+  }
+  $linked = @(go list -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}' ./cmd/launcher | Sort-Object -Unique)
+  $want = @($pins.PSObject.Properties | Where-Object { $_.Name -ne 'note' } | ForEach-Object { "$($_.Name)@$($_.Value.version)" } | Sort-Object)
+  if (($linked -join '|') -ne ($want -join '|')) { throw "linked Go modules differ from the pinned set.`nlinked: $($linked -join ', ')`npinned: $($want -join ', ')" }
+  go mod verify; if ($LASTEXITCODE) { throw 'go mod verify failed (module cache differs from go.sum)' }
   # application manifest (asInvoker, common controls v6, DPI) -> embedded by the linker
   go run ./cmd/genrsrc cmd/launcher/rsrc_windows_amd64.syso; if ($LASTEXITCODE) { throw 'genrsrc failed' }
   $fmt = gofmt -l .

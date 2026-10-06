@@ -120,12 +120,15 @@ $gitDirty = [bool](git -C $RunetRoot status --porcelain)
 $goVer = (& go version)
 $buildDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'
 $sbSrcHash = Get-Sha256 $sbSource
+$goMods = @($lock.'go-modules'.PSObject.Properties | Where-Object { $_.Name -ne 'note' } | ForEach-Object { '{0} {1}  ({2})  h1:{3}' -f $_.Name, $_.Value.version, $_.Value.license, $_.Value.h1 })
+$goModsText = "Third-party Go code compiled into RunetAccess.exe (pinned in scripts/tools.lock.json, hashes as in go.sum):`r`n" + ($goMods -join "`r`n") + "`r`nThe licence texts are in the folders next to this file. The Outline SDK is used unmodified: the Outline connection prefix needs it (see docs/KEY-FORMATS.md).`r`n"
 $buildInfo = @"
 Runet Access $AppVersion
 Git commit: $gitCommit$(if ($gitDirty) { ' (build made from a tree with uncommitted changes)' })
 Built: $buildDate
 Go: $goVer
 sing-box: $sbVer, unmodified official release, sing-box.exe SHA-256 $sbHash
+Go libraries (compiled in): $($goMods -join '; ')
 Installer compiler: Inno Setup $innoVersion
 Signature: NONE (the installer and the programs are not code-signed)
 "@
@@ -140,6 +143,11 @@ $plan = @(
   @{ Src = (Join-Path $RunetRoot 'THIRD_PARTY.md'); Dst = 'licenses\THIRD_PARTY.txt' },
   @{ Src = (Join-Path $RunetRoot 'third_party\MagicProxy\LICENSE'); Dst = 'licenses\MagicProxy\LICENSE.txt' },
   @{ Src = (Join-Path $L 'tools\go\LICENSE'); Dst = 'licenses\Go\LICENSE.txt' },
+  @{ Text = $goModsText; Dst = 'licenses\go-modules.txt'; Bom = $true },
+  @{ Src = (Join-Path $RunetRoot 'third_party\outline-sdk\LICENSE'); Dst = 'licenses\OutlineSDK\LICENSE.txt' },
+  @{ Src = (Join-Path $RunetRoot 'third_party\go-shadowsocks2\LICENSE'); Dst = 'licenses\go-shadowsocks2\LICENSE.txt' },
+  @{ Src = (Join-Path $RunetRoot 'third_party\golang-x\LICENSE'); Dst = 'licenses\golang-x\LICENSE.txt' },
+  @{ Src = (Join-Path $RunetRoot 'third_party\golang-x\PATENTS'); Dst = 'licenses\golang-x\PATENTS.txt' },
   @{ Src = (Join-Path $RunetRoot 'third_party\sing-box\GPL-3.0.txt'); Dst = 'licenses\sing-box\GPL-3.0.txt' },
   @{ Src = (Join-Path $RunetRoot 'third_party\sing-box\LICENSE'); Dst = 'licenses\sing-box\LICENSE.txt' },
   @{ Src = (Join-Path $RunetRoot 'installer\SOURCE-OFFER.txt'); Dst = 'licenses\sing-box\SOURCE-OFFER.txt'; Bom = $true },

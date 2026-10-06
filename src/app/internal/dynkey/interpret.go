@@ -57,13 +57,23 @@ func fromJSON(b []byte) (*config.Profile, *keyparse.Error) {
 		}
 		return ""
 	}
+	var prefix []byte
 	for k, v := range m {
 		switch strings.ToLower(k) {
 		case "server", "server_port", "password", "method":
 		case "prefix":
-			if s, _ := v.(string); s != "" {
-				return nil, keyparse.Fail("ss-prefix", keyparse.PrefixMsg)
+			if v == nil {
+				continue
 			}
+			s, isStr := v.(string)
+			if !isStr {
+				return nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «prefix» должен быть строкой.")
+			}
+			p, perr := keyparse.DecodePrefix(s)
+			if perr != nil {
+				return nil, perr
+			}
+			prefix = p
 		case "plugin", "plugin_opts":
 			if s, _ := v.(string); s != "" {
 				return nil, keyparse.Fail("ss-plugin", "Настройки ключа требуют плагин Shadowsocks «"+keyparse.SafeName(strings.SplitN(s, ";", 2)[0])+"»: плагины не поддерживаются.")
@@ -82,7 +92,7 @@ func fromJSON(b []byte) (*config.Profile, *keyparse.Error) {
 	case string:
 		port, _ = strconv.Atoi(strings.TrimSpace(v))
 	}
-	return keyparse.ShadowsocksProfile(str("server"), port, str("method"), str("password"))
+	return keyparse.ShadowsocksProfile(str("server"), port, str("method"), str("password"), prefix)
 }
 
 func looksLikeYAML(text string) bool {
@@ -132,6 +142,10 @@ func typeOf(m map[string]any) string {
 //
 // where <shadowsocks> is {$type: shadowsocks, endpoint, cipher, secret, prefix?}. Every other transport
 // type (websocket, tls, socks5, split, disorder, override, ...) is named and refused.
+//
+// The prefix of the tcp part is the one used (everything the browser sends is TCP). The udp part may carry a
+// different prefix (Outline lets the two differ); it is not used, but its server, cipher and secret must be
+// the same as the tcp part's, as before.
 func fromTransport(t map[string]any) (*config.Profile, *keyparse.Error) {
 	var tcp, udp map[string]any
 	switch ty := typeOf(t); ty {
@@ -151,12 +165,12 @@ func fromTransport(t map[string]any) (*config.Profile, *keyparse.Error) {
 	default:
 		return nil, keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: транспорт «"+keyparse.SafeName(ty)+"» не поддерживается.")
 	}
-	host, port, method, secret, kerr := shadowsocksPart(tcp)
+	host, port, method, secret, prefix, kerr := shadowsocksPart(tcp)
 	if kerr != nil {
 		return nil, kerr
 	}
 	if udp != nil {
-		h2, p2, m2, s2, kerr := shadowsocksPart(udp)
+		h2, p2, m2, s2, _, kerr := shadowsocksPart(udp)
 		if kerr != nil {
 			return nil, kerr
 		}
@@ -164,22 +178,28 @@ func fromTransport(t map[string]any) (*config.Profile, *keyparse.Error) {
 			return nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: для TCP и UDP заданы разные серверы или пароли.")
 		}
 	}
-	return keyparse.ShadowsocksProfile(host, port, method, secret)
+	return keyparse.ShadowsocksProfile(host, port, method, secret, prefix)
 }
 
-func shadowsocksPart(m map[string]any) (host string, port int, method, secret string, kerr *keyparse.Error) {
+func shadowsocksPart(m map[string]any) (host string, port int, method, secret string, prefix []byte, kerr *keyparse.Error) {
 	if ty := typeOf(m); ty != "shadowsocks" {
-		return "", 0, "", "", keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: транспорт «"+keyparse.SafeName(ty)+"» не поддерживается.")
+		return "", 0, "", "", nil, keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: транспорт «"+keyparse.SafeName(ty)+"» не поддерживается.")
 	}
 	for k, v := range m {
 		switch k {
 		case "$type", "endpoint", "cipher", "secret":
 		case "prefix":
-			if s, _ := v.(string); s != "" {
-				return "", 0, "", "", keyparse.Fail("ss-prefix", keyparse.PrefixMsg)
+			s, isStr := v.(string)
+			if !isStr {
+				return "", 0, "", "", nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «prefix» должен быть строкой.")
 			}
+			p, perr := keyparse.DecodePrefix(s)
+			if perr != nil {
+				return "", 0, "", "", nil, perr
+			}
+			prefix = p
 		default:
-			return "", 0, "", "", keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
+			return "", 0, "", "", nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
 		}
 	}
 	endpoint := ""
@@ -188,20 +208,20 @@ func shadowsocksPart(m map[string]any) (host string, port int, method, secret st
 		endpoint = e
 	case map[string]any:
 		if ty := typeOf(e); ty != "dial" {
-			return "", 0, "", "", keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: адрес сервера задан способом «"+keyparse.SafeName(ty)+"».")
+			return "", 0, "", "", nil, keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: адрес сервера задан способом «"+keyparse.SafeName(ty)+"».")
 		}
 		for k := range e {
 			if k != "$type" && k != "address" {
-				return "", 0, "", "", keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
+				return "", 0, "", "", nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
 			}
 		}
 		endpoint, _ = e["address"].(string)
 	}
 	h, p, ok := splitHostPort(endpoint)
 	if !ok {
-		return "", 0, "", "", keyparse.Fail("server", "В ключе нет адреса сервера или порта.")
+		return "", 0, "", "", nil, keyparse.Fail("server", "В ключе нет адреса сервера или порта.")
 	}
 	method, _ = m["cipher"].(string)
 	secret, _ = m["secret"].(string)
-	return h, p, method, secret, nil
+	return h, p, method, secret, prefix, nil
 }

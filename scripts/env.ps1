@@ -18,7 +18,7 @@ New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
 $env:GOENV       = Join-Path $L 'cache\go-env'      # keeps %APPDATA%\go out of play
 $env:GOTOOLCHAIN = 'local'                           # never auto-download another toolchain
 $env:GOFLAGS     = '-mod=mod'
-$env:GOPROXY     = 'off'                             # host has no third-party deps
+$env:GOPROXY     = 'off'                             # module cache only; fetch-tools.ps1 fills it
 $env:GONOSUMDB   = '*'
 $env:npm_config_cache = Join-Path $L 'cache\npm'
 $env:NODE_OPTIONS = ''

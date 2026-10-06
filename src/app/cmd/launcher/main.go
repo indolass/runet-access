@@ -30,6 +30,7 @@ import (
 	"runetaccess/internal/core"
 	"runetaccess/internal/dynkey"
 	"runetaccess/internal/keyparse"
+	"runetaccess/internal/ssbridge"
 )
 
 var version = "0.3.0-dev"
@@ -57,7 +58,8 @@ type app struct {
 	mu       sync.Mutex
 	phase    string
 	errMsg   string
-	cfg      []byte // generated core config, kept in memory only, for automatic restarts
+	cfg      []byte           // generated core config, kept in memory only, for automatic restarts
+	bridge   *ssbridge.Bridge // only for keys with an Outline prefix: the core's single upstream
 	guard    net.Listener
 	restarts int
 	closing  bool
@@ -374,11 +376,12 @@ func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string
 	startGen := a.gen
 	a.mu.Unlock()
 	fctx, fcancel := context.WithTimeout(context.Background(), 25*time.Second)
-	cfg, addr, perr := buildConfig(fctx, key, a.proxyPort)
+	pl, perr := buildPlan(fctx, key, a.proxyPort)
 	fcancel()
 	if perr != nil {
 		return 0, perr.Class, perr.Message // "format", "key", "unsupported" or "fetch"
 	}
+	cfg, addr := pl.cfg, pl.addr
 	a.mu.Lock()
 	cancelledMeanwhile := a.gen != startGen || a.closing
 	a.mu.Unlock()
@@ -402,7 +405,7 @@ func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string
 	}
 	a.mu.Unlock()
 	if wasUp {
-		_ = a.mgr.Stop()
+		a.stopCore()
 		a.reguard()
 	}
 
@@ -433,15 +436,25 @@ func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string
 		return 0, "cancelled", ""
 	}
 
+	// A key with an Outline prefix is carried by the local bridge; the core's only upstream is that bridge.
+	var br *ssbridge.Bridge
+	if pl.p.Prefix != nil {
+		var berr error
+		br, cfg, berr = a.startBridge(pl.p)
+		if berr != nil {
+			return fail("core", "Компонент подключения не запустился. Перезапустите Runet Access.")
+		}
+	}
 	a.mu.Lock()
 	a.closeGuard()
 	a.mu.Unlock()
 	if err := a.mgr.Start(cfg, a.proxyPort); err != nil {
+		a.stopCore()
 		a.reguard()
 		return fail("core", "Компонент подключения не запустился. Перезапустите Runet Access.")
 	}
 	if err := a.mgr.WaitReady(a.proxyPort, 15*time.Second); err != nil {
-		_ = a.mgr.Stop()
+		a.stopCore()
 		a.reguard()
 		if stale() {
 			return 0, "cancelled", ""
@@ -451,9 +464,15 @@ func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string
 	a.mu.Lock()
 	if a.gen != gen || a.closing {
 		a.mu.Unlock()
-		_ = a.mgr.Stop()
+		a.stopCore()
 		a.reguard()
 		return 0, "cancelled", ""
+	}
+	if br != nil && a.bridge != br { // the bridge died while the core was starting
+		a.mu.Unlock()
+		a.stopCore()
+		a.reguard()
+		return fail("core", "Компонент подключения не запустился. Перезапустите Runet Access.")
 	}
 	a.cfg, a.phase, a.errMsg, a.restarts = cfg, phaseConnected, "", 0
 	a.epoch++
@@ -516,7 +535,7 @@ func (a *app) disconnect() {
 	a.gen++
 	a.phase, a.errMsg, a.cfg, a.confirmed, a.pendingKey, a.restarting = phaseIdle, "", nil, false, "", false
 	a.mu.Unlock()
-	_ = a.mgr.Stop()
+	a.stopCore()
 	a.reguard()
 }
 
@@ -558,11 +577,11 @@ func (a *app) onCoreExit(err error) {
 				return
 			}
 			a.mu.Unlock()
-			_ = a.mgr.Stop()
+			a.stopCore()
 			a.reguard()
 			return
 		}
-		_ = a.mgr.Stop()
+		a.stopCore()
 	}
 	a.mu.Lock()
 	if a.gen == gen {
@@ -637,7 +656,7 @@ func (a *app) shutdown() {
 		a.closing = true
 		a.closeGuard()
 		a.mu.Unlock()
-		_ = a.mgr.Stop()
+		a.stopCore()
 		a.mgr.Cleanup()
 		if a.releaseLock != nil {
 			a.releaseLock()
@@ -670,16 +689,100 @@ func resolveProfile(ctx context.Context, key string) (*config.Profile, *keyparse
 	return keyparse.Parse(key)
 }
 
-// buildConfig validates the key and returns the core config for the given local port and the
-// server's host:port (for the reachability test only; it is never shown or logged).
-func buildConfig(ctx context.Context, key string, port int) ([]byte, string, *keyparse.Error) {
+// plan is a validated key: its profile, the server's host:port (for the reachability test only; it is never
+// shown or logged) and the core config. cfg is nil for a key with an Outline prefix: that config can only be
+// written once the local bridge exists (see startBridge).
+type plan struct {
+	p    *config.Profile
+	addr string
+	cfg  []byte
+}
+
+// buildPlan validates the key and returns the plan for the given local port.
+func buildPlan(ctx context.Context, key string, port int) (*plan, *keyparse.Error) {
 	p, kerr := resolveProfile(ctx, key)
 	if kerr != nil {
-		return nil, "", kerr
+		return nil, kerr
 	}
+	pl := &plan{p: p, addr: net.JoinHostPort(p.Server, strconv.Itoa(p.Port))}
+	if len(p.Prefix) > 0 {
+		p.Prefix = append([]byte(nil), p.Prefix...)
+		return pl, nil
+	}
+	p.Prefix = nil
 	cfg, err := config.Build(p, config.Inbound{Listen: "127.0.0.1", Port: port}, config.Routing{Final: "proxy"}, "warn")
 	if err != nil {
-		return nil, "", keyparse.Fail("config", "Ключ не удалось применить. Проверьте, что он скопирован целиком.")
+		return nil, keyparse.Fail("config", "Ключ не удалось применить. Проверьте, что он скопирован целиком.")
 	}
-	return cfg, net.JoinHostPort(p.Server, strconv.Itoa(p.Port)), nil
+	pl.cfg = cfg
+	return pl, nil
+}
+
+// bridgeProfile is what the core sees for a prefix key: one authenticated SOCKS5 upstream on loopback.
+func bridgeProfile(port int, user, pass string) *config.Profile {
+	return &config.Profile{ID: "runet-access-bridge", Name: keyparse.ProfileName, Type: "socks", SocksVersion: "5",
+		Server: "127.0.0.1", Port: port, Username: user, Password: pass}
+}
+
+// startBridge starts the local Shadowsocks bridge for a prefix key and returns it together with the core
+// config that uses it. The bridge's login is random for this run and exists only in that config (memory).
+func (a *app) startBridge(p *config.Profile) (*ssbridge.Bridge, []byte, error) {
+	a.closeBridge()
+	rnd := make([]byte, 24)
+	if _, err := rand.Read(rnd); err != nil {
+		return nil, nil, err
+	}
+	user, pass := hex.EncodeToString(rnd[:12]), hex.EncodeToString(rnd[12:])
+	var br *ssbridge.Bridge
+	br, err := ssbridge.Start(ssbridge.Config{Server: p.Server, Port: p.Port, Method: p.Method, Password: p.Password, Prefix: p.Prefix},
+		user, pass, func(error) { a.onBridgeExit(br) })
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := config.Build(bridgeProfile(br.Port(), user, pass), config.Inbound{Listen: "127.0.0.1", Port: a.proxyPort}, config.Routing{Final: "proxy"}, "warn")
+	if err != nil {
+		br.Close()
+		return nil, nil, err
+	}
+	a.mu.Lock()
+	a.bridge = br
+	a.mu.Unlock()
+	return br, cfg, nil
+}
+
+// closeBridge stops the bridge, if one runs.
+func (a *app) closeBridge() {
+	a.mu.Lock()
+	b := a.bridge
+	a.bridge = nil
+	a.mu.Unlock()
+	if b != nil {
+		b.Close()
+	}
+}
+
+// stopCore stops everything that carries the traffic: the core and, for a prefix key, its bridge.
+func (a *app) stopCore() {
+	_ = a.mgr.Stop()
+	a.closeBridge()
+}
+
+// onBridgeExit runs when the bridge's listener fails by itself (a deliberate Close is silent). The core's
+// only upstream is gone, so nothing can pass; it is stopped, the guard is put back and the green state is
+// withdrawn, exactly as for a core that died and cannot be restarted.
+func (a *app) onBridgeExit(br *ssbridge.Bridge) {
+	a.mu.Lock()
+	if a.bridge != br || a.closing {
+		a.mu.Unlock()
+		return
+	}
+	a.bridge = nil
+	a.confirmed = false
+	a.epoch++ // a verdict still on its way described the bridge that has just died
+	if a.phase == phaseConnected {
+		a.phase, a.errMsg, a.cfg, a.restarting = phaseError, "Соединение прервано. Окно не выходит в интернет напрямую.", nil, false
+	}
+	a.mu.Unlock()
+	_ = a.mgr.Stop()
+	a.reguard()
 }

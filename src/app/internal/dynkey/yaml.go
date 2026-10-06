@@ -118,10 +118,16 @@ func parseBlock(lines []yline, pos *int, indent int) (map[string]any, string) {
 // stripComment removes "# ..." that starts a line or follows whitespace outside quotes.
 func stripComment(s string) string {
 	var q rune
+	esc := false // inside "..." the character after a backslash never closes the string
 	for i, r := range s {
 		switch {
 		case q != 0:
-			if r == q {
+			switch {
+			case esc:
+				esc = false
+			case q == '"' && r == '\\':
+				esc = true
+			case r == q:
 				q = 0
 			}
 		case r == '"' || r == '\'':
@@ -139,8 +145,8 @@ func scalar(v string) (any, string) {
 		if len(v) < 2 || v[len(v)-1] != '"' {
 			return nil, "строка в кавычках не закрыта"
 		}
-		u, err := strconv.Unquote(v)
-		if err != nil {
+		u, ok := unquoteDouble(v[1 : len(v)-1])
+		if !ok {
 			return nil, "строка в кавычках содержит неподдерживаемые экранирования"
 		}
 		return u, ""
@@ -157,6 +163,57 @@ func scalar(v string) (any, string) {
 		return nil, "якоря, ссылки и теги YAML не поддерживаются"
 	}
 	return v, ""
+}
+
+// unquoteDouble reads the inside of a YAML 1.2 double-quoted scalar. The escapes are YAML's own (\xHH, \uHHHH
+// and \UHHHHHHHH name a CODE POINT, which is what an Outline "prefix" is written with), not Go's, where \xHH
+// would be a raw byte. An unescaped quote or a bad escape is refused.
+func unquoteDouble(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == '"' {
+			return "", false
+		}
+		if c != '\\' {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		i++
+		if i >= len(s) {
+			return "", false
+		}
+		e := s[i]
+		i++
+		simple := map[byte]rune{'0': 0, 'a': 7, 'b': 8, 't': 9, '\t': 9, 'n': 10, 'v': 11, 'f': 12, 'r': 13, 'e': 27, ' ': ' ',
+			'"': '"', '/': '/', '\\': '\\', 'N': 0x85, '_': 0xA0, 'L': 0x2028, 'P': 0x2029}
+		if r, ok := simple[e]; ok {
+			b.WriteRune(r)
+			continue
+		}
+		n := 0
+		switch e {
+		case 'x':
+			n = 2
+		case 'u':
+			n = 4
+		case 'U':
+			n = 8
+		default:
+			return "", false
+		}
+		if i+n > len(s) {
+			return "", false
+		}
+		cp, err := strconv.ParseUint(s[i:i+n], 16, 32)
+		if err != nil || cp > 0x10FFFF || (cp >= 0xD800 && cp < 0xE000) {
+			return "", false
+		}
+		b.WriteRune(rune(cp))
+		i += n
+	}
+	return b.String(), true
 }
 
 func splitHostPort(s string) (string, int, bool) {

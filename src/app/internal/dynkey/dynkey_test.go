@@ -233,7 +233,9 @@ func TestInterpretJSON(t *testing.T) {
 		}
 	}
 	bad := []struct{ j, code, class, mention string }{
-		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","prefix":"POST "}`, "ss-prefix", keyparse.ClassUnsupported, "префикс"},
+		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","prefix":"€"}`, "ss-prefix-bad", keyparse.ClassKey, "Префикс"},
+		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","prefix":5}`, "dyn-param", keyparse.ClassUnsupported, "prefix"},
+		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","prefix":"AAAAAAAAAAAAAAAAA"}`, "ss-prefix-long", keyparse.ClassUnsupported, "слишком длинный"},
 		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","plugin":"v2ray-plugin"}`, "ss-plugin", keyparse.ClassUnsupported, "v2ray-plugin"},
 		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","routing":{"x":1}}`, "dyn-param", keyparse.ClassUnsupported, "routing"},
 		{`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"rc4-md5"}`, "ss-legacy-cipher", keyparse.ClassUnsupported, "rc4-md5"},
@@ -290,10 +292,57 @@ func TestInterpretYAML(t *testing.T) {
 	}
 }
 
+func TestInterpretPrefix(t *testing.T) {
+	// JSON: the string is read by the JSON decoder (\u0016 -> U+0016), each character is one byte
+	bs := string(rune(92)) // a backslash: written out here so that no tool turns "backslash-u" sequences into characters
+	p, err := Interpret([]byte(strings.ReplaceAll(`{"server":"203.0.113.9","server_port":8388,"password":"p","method":"chacha20-ietf-poly1305","prefix":"@u0016@u0003@u0001@u0000@u00a8@u0001@u0001"}`, "@", bs)))
+	if err != nil || string(p.Prefix) != "\x16\x03\x01\x00\xa8\x01\x01" {
+		t.Fatalf("json: %v %v", p, err)
+	}
+	// YAML, the example of the Outline guide; the udp part has ANOTHER prefix, which is allowed and not used
+	y := "transport:\n  $type: tcpudp\n  tcp:\n    $type: shadowsocks\n    endpoint: 203.0.113.9:4321\n    cipher: chacha20-ietf-poly1305\n    secret: s\n" +
+		"    prefix: \"\\u0013\\u0003\\u0003\\u003F\"\n" +
+		"  udp:\n    $type: shadowsocks\n    endpoint: 203.0.113.9:4321\n    cipher: chacha20-ietf-poly1305\n    secret: s\n    prefix: \"\\u006b\\u007b\\u0001\\u0020\"\n"
+	p, err = Interpret([]byte(y))
+	if err != nil || string(p.Prefix) != "\x13\x03\x03\x3f" {
+		t.Fatalf("yaml: % x %v", p.Prefix, err)
+	}
+	// a bare shadowsocks transport; escapes are YAML's (\xHH is the CODE POINT, so \xA8 is one byte A8)
+	for text, want := range map[string]string{
+		`"@xA8@u00ff@x00"`: "\xa8\xff\x00",
+		`"A@" # c"`:        "A\" # c",
+		`'it''s'`:          "it's",
+		`"@t@r@n@0@e@@"`:   "\t\r\n\x00\x1b\\",
+		`"@u00A8"`:         "\xa8",
+		`"@U000000A8"`:     "\xa8",
+		`"A@ B"`:           "A B",
+	} {
+		text = strings.ReplaceAll(text, "@", bs)
+		p, err := Interpret([]byte("transport:\n  $type: shadowsocks\n  endpoint: h.example.org:443\n  cipher: aes-256-gcm\n  secret: x\n  prefix: " + text + "\n"))
+		if err != nil {
+			t.Errorf("%s: %s", text, err.Message)
+		} else if string(p.Prefix) != want {
+			t.Errorf("%s: % x", text, p.Prefix)
+		}
+	}
+	// the tcp part wins; no prefix in tcp means none, even when udp has one
+	y2 := "transport:\n  $type: tcpudp\n  tcp:\n    $type: shadowsocks\n    endpoint: 203.0.113.9:4321\n    cipher: aes-256-gcm\n    secret: s\n  udp:\n    $type: shadowsocks\n    endpoint: 203.0.113.9:4321\n    cipher: aes-256-gcm\n    secret: s\n    prefix: \"POST \"\n"
+	if p, err := Interpret([]byte(y2)); err != nil || len(p.Prefix) != 0 {
+		t.Fatalf("tcp without a prefix: % x %v", p.Prefix, err)
+	}
+	// a link as the answer carries its own prefix
+	if p, err := Interpret([]byte("ss://" + base64.RawURLEncoding.EncodeToString([]byte("aes-256-gcm:x")) + "@203.0.113.9:443/?prefix=POST%20")); err != nil || string(p.Prefix) != "POST " {
+		t.Fatalf("link: %v", err)
+	}
+}
+
 func TestInterpretYAMLRefusals(t *testing.T) {
 	ss := "    $type: shadowsocks\n    endpoint: 203.0.113.9:4321\n    cipher: aes-256-gcm\n    secret: PASSWORD-SECRET-123\n"
 	cases := []struct{ name, y, code, mention string }{
-		{"prefix", "transport:\n  $type: tcpudp\n  tcp:\n" + ss + "    prefix: \"POST \"\n", "ss-prefix", "префикс"},
+		{"prefix above 255", "transport:\n  $type: tcpudp\n  tcp:\n" + ss + "    prefix: \"\\u20AC\"\n", "ss-prefix-bad", "Префикс"},
+		{"prefix with a bad escape", "transport:\n  $type: tcpudp\n  tcp:\n" + ss + "    prefix: \"\\q\"\n", "dyn-yaml", "экранирования"},
+		{"prefix with a half of a surrogate pair", "transport:\n  $type: tcpudp\n  tcp:\n" + ss + "    prefix: \"\\uD800\"\n", "dyn-yaml", "экранирования"},
+		{"prefix too long for the cipher", "transport:\n  $type: tcpudp\n  tcp:\n" + ss + "    prefix: \"AAAAAAAAAAAAAAAAA\"\n", "ss-prefix-long", "слишком длинный"},
 		{"websocket transport", "transport:\n  $type: tcpudp\n  tcp:\n    $type: websocket\n    url: wss://x.example.org/s\n", "dyn-transport", "websocket"},
 		{"tls wrapper", "transport:\n  $type: tls\n  inner: x\n", "dyn-transport", "tls"},
 		{"socks5", "transport:\n  $type: socks5\n  address: 1.2.3.4:1\n", "dyn-transport", "socks5"},

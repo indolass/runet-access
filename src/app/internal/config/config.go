@@ -107,6 +107,9 @@ type Profile struct {
 	Method   string `json:"method"`
 	AlterID  int    `json:"alterId"`
 	Flow     string `json:"flow"`
+	// shadowsocks: Outline "prefix" (the first bytes of the salt). The core cannot express it, so Build refuses a
+	// profile that carries one; such a profile is served by package ssbridge and reaches the core as a socks hop.
+	Prefix []byte `json:"prefix"`
 	// socks: "5" (default), "4", "4a". http: ignored.
 	SocksVersion string `json:"socksVersion"`
 	// ssh: PEM private key (alternative to password auth).
@@ -352,6 +355,10 @@ func buildProxy(p *Profile) (outbounds []obj, endpoints []obj, err error) {
 		out["type"] = "trojan"
 		out["password"] = p.Password
 	case "shadowsocks":
+		// Never drop it silently: without the prefix the connection would be a different one.
+		if len(p.Prefix) > 0 {
+			return nil, nil, fmt.Errorf("shadowsocks prefix is not supported by the core")
+		}
 		out["type"] = "shadowsocks"
 		out["method"] = p.Method
 		out["password"] = p.Password

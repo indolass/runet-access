@@ -34,4 +34,13 @@ if (-not (Test-Path (Join-Path $sbDir 'sing-box.exe'))) {
   Copy-Item $exe.FullName (Join-Path $sbDir 'sing-box.exe')
   Remove-Item $tmp -Recurse -Force
 }
+# Go libraries (Outline SDK and what it needs). Normal builds run with GOPROXY=off (env.ps1), so this is the one step
+# that reaches the Go module proxy; the checksum database stays ON and go.sum must match the hashes pinned above.
+Push-Location (Join-Path $RunetRoot 'src\app')
+$saved = @{ P = $env:GOPROXY; N = $env:GONOSUMDB; F = $env:GOFLAGS }
+try {
+  $env:GOPROXY = 'https://proxy.golang.org'; $env:GONOSUMDB = ''; $env:GOFLAGS = '-mod=mod'
+  go mod download; if ($LASTEXITCODE) { throw 'go mod download failed' }
+  go mod verify;   if ($LASTEXITCODE) { throw 'go mod verify failed' }
+} finally { $env:GOPROXY = $saved.P; $env:GONOSUMDB = $saved.N; $env:GOFLAGS = $saved.F; Pop-Location }
 Write-Host "tools ready under $L\tools"

@@ -22,6 +22,33 @@
       "ISCmplr.dll": "85a1e3090d3a5b85319f001b7c8f9ecfad45f37eff030a67bbe29ef58b7aa2c3"
     }
   },
+  "go-modules": {
+    "note": "Go libraries linked into RunetAccess.exe (go list -deps), the only third-party code that is compiled in. h1 = content hash as in src/app/go.sum, equal to the one published by the Go checksum database (sum.golang.org) on 2026-10-06.",
+    "golang.getoutline.org/sdk": {
+      "version": "v0.0.23",
+      "h1": "UKoKCrRH3Ed6Jpg8ODYwOo6O1B1lvfIHPreMrTkSTcc=",
+      "license": "Apache-2.0",
+      "source": "https://github.com/OutlineFoundation/outline-sdk (go-import of golang.getoutline.org/sdk; formerly Jigsaw-Code/outline-sdk)"
+    },
+    "github.com/shadowsocks/go-shadowsocks2": {
+      "version": "v0.1.5",
+      "h1": "PDSQv9y2S85Fl7VBeOMF9StzeXZyK1HakRm86CUbr28=",
+      "license": "Apache-2.0",
+      "source": "https://github.com/shadowsocks/go-shadowsocks2 (package socks only, a dependency of the Outline SDK)"
+    },
+    "golang.org/x/crypto": {
+      "version": "v0.41.0",
+      "h1": "WKYxWedPGCTVVl5+WHSSrOBT0O8lx32+zxmHxijgXp4=",
+      "license": "BSD-3-Clause",
+      "source": "https://go.googlesource.com/crypto"
+    },
+    "golang.org/x/sys": {
+      "version": "v0.35.0",
+      "h1": "vz1N37gP5bs89s7He8XuIYXpyY0+QlsKmzipCbUtyxI=",
+      "license": "BSD-3-Clause",
+      "source": "https://go.googlesource.com/sys"
+    }
+  },
   "sing-box-source": {
     "version": "1.13.16",
     "url": "https://github.com/SagerNet/sing-box/archive/refs/tags/v1.13.16.tar.gz",
