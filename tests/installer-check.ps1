@@ -152,24 +152,35 @@ Check 'Chrome missing (scripted answers: open page, check again, close): officia
   -not (Test-Path (Join-Path $Home1 'run.lock'))
 }
 Remove-Item Env:\RUNET_TEST_CHROME_PROMPT, Env:\RUNET_OPEN_LOG -ErrorAction SilentlyContinue
-Check 'Chrome missing: the REAL window appears, has the two actions and Close; closing it ends the program without error' {
-  Add-Type -AssemblyName UIAutomationClient
-  Add-Type @'
-using System; using System.Runtime.InteropServices;
-public class WinMsg { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); }
+Check 'Chrome missing: the REAL window appears (marked TEST), has download / manual / check again / Close; closing it ends the program without error' {
+  Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class WinMsg {
+  delegate bool CB(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(CB cb, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static IntPtr Find(int pid) { IntPtr f = IntPtr.Zero;
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p != pid || !IsWindowVisible(h)) return true;
+      var c = new StringBuilder(64); GetClassName(h, c, 64); if (c.ToString() == "#32770") { f = h; return false; } return true; }, IntPtr.Zero);
+    return f; }
+}
 '@
-  $p = Start-Process -FilePath $AppExe -PassThru; Start-Sleep 3
-  $p.Refresh(); if ($p.HasExited) { throw 'launcher exited without showing the window' }
-  $h = $p.MainWindowHandle; if ($h -eq [IntPtr]::Zero) { throw 'no window' }
-  $ae = [Windows.Automation.AutomationElement]::FromHandle($h)
-  $all = $ae.FindAll('Descendants', [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name }
-  $txt = $all -join ' | '
-  foreach ($need in @((Cyr 0x41e, 0x442, 0x43a, 0x440, 0x44b, 0x442, 0x44c), (Cyr 0x41f, 0x440, 0x43e, 0x432, 0x435, 0x440, 0x438, 0x442, 0x44c), 'Chrome', (Cyr 0x417, 0x430, 0x43a, 0x440, 0x44b, 0x442, 0x44c))) { if ($txt -notmatch [regex]::Escape($need)) { throw "window text lacks '$need'" } }
+  $dump = Join-Path $Work 'dialogs.txt'; $env:RUNET_TEST_DIALOG_DUMP = $dump
+  $p = Start-Process -FilePath $AppExe -PassThru
+  $h = [IntPtr]::Zero; for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 250; if ($p.HasExited) { throw 'launcher exited without showing the window' }; $h = [WinMsg]::Find($p.Id) }
+  if ($h -eq [IntPtr]::Zero) { $p.Kill(); throw 'no window' }
+  $txt = if (Test-Path $dump) { [IO.File]::ReadAllText($dump, [Text.Encoding]::UTF8) } else { '' }
+  $needles = @((Cyr 0x422, 0x415, 0x421, 0x422), (Cyr 0x421, 0x43a, 0x430, 0x447, 0x430, 0x442, 0x44c, 0x20, 0x438, 0x20, 0x443, 0x441, 0x442, 0x430, 0x43d, 0x43e, 0x432, 0x438, 0x442, 0x44c), (Cyr 0x432, 0x440, 0x443, 0x447, 0x43d, 0x443, 0x44e), (Cyr 0x41f, 0x440, 0x43e, 0x432, 0x435, 0x440, 0x438, 0x442, 0x44c), 'Chrome')
+  foreach ($need in $needles) { if ($txt -notmatch [regex]::Escape($need)) { throw "window text lacks '$need': $txt" } }
   [void][WinMsg]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)   # WM_CLOSE to OUR dialog
   if (-not $p.WaitForExit(10000)) { $p.Kill(); throw 'did not exit after the window was closed' }
   if ($p.ExitCode -ne 0) { throw "exit code $($p.ExitCode)" }
   @(Own-Procs).Count -eq 0
 }
+Remove-Item Env:\RUNET_TEST_DIALOG_DUMP -ErrorAction SilentlyContinue
 Remove-Item Env:\RUNET_CHROME_PATH -ErrorAction SilentlyContinue
 
 # ---- 4. running program: setup must ask to close it, never kill it -----------------------------------------

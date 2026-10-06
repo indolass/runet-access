@@ -180,9 +180,6 @@ func chromeArgs(profileDir string, proxyPort int) []string {
 	return args
 }
 
-// chromeInstallURL is Google's own page for getting Chrome. We open it only on the user's click.
-const chromeInstallURL = "https://www.google.com/chrome/"
-
 // openerFromEnv returns the function that hands an address to Windows. Test only: with
 // RUNET_OPEN_LOG set, addresses are appended to that file instead of being opened.
 func openerFromEnv() func(string) error {
@@ -203,16 +200,22 @@ func openerFromEnv() func(string) error {
 
 // waitForChrome returns the path of an installed Chrome. When there is none it shows a small
 // window (see chrome_prompt_windows.go) and keeps asking until Chrome appears or the user
-// closes the window, in which case it returns "".
+// closes the window, in which case it returns "". The window can also download and start
+// Google's own installer (chrome_install.go); the result of the last attempt is shown on top.
 func waitForChrome(open func(string) error) string {
+	note, details := "", ""
 	for {
 		if p := findChrome(); p != "" {
 			return p
 		}
-		switch showChromeMissing() {
+		switch showChromeMissing(note, details) {
+		case dlgInstall:
+			note, details = installChromeInteractive()
 		case dlgOpen:
-			_ = open(chromeInstallURL)
+			note, details = "", ""
+			_ = open(chromeManualURL)
 		case dlgRecheck:
+			note, details = "", ""
 		default:
 			return ""
 		}
