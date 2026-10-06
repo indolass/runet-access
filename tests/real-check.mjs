@@ -10,6 +10,7 @@ import { join } from "node:path";
 import net from "node:net";
 import { existsSync, readFileSync, rmSync, mkdirSync, writeFileSync, statSync } from "node:fs";
 import { root, connectBrowser, pageWhere, sleep } from "./cdp.mjs";
+import { classifyPage, DOM_PROBE } from "./page-verdict.mjs";
 
 const run = promisify(execFile);
 const exe = join(root, "dist", "runet-access", "RunetAccess.exe");
@@ -120,9 +121,6 @@ if (!connected) {
 }
 
 // ---- 2. public pages ------------------------------------------------------------------------
-const CAPTCHA = /captcha|капч|smartcaptcha|recaptcha|hcaptcha|я не робот|i'?m not a robot|are you (a )?human|подтвердите,? что вы (не робот|человек)|проверка (безопасности|браузера)|checking your browser|just a moment|ddos-guard|qrator|attention required/i;
-const DENIED = /access denied|forbidden|доступ (к сайту )?(запрещ|ограничен)|отказано в доступе|доступ закрыт|заблокирован|not available in your (country|region)|недоступен.*(вашего региона|вашей страны)|error 1020|403 forbidden/i;
-
 async function visit(site) {
   const r = { site: site.name, url: site.url };
   const { targetId } = await browser.send("Target.createTarget", { url: "about:blank" });
@@ -134,26 +132,35 @@ async function visit(site) {
   const t1 = Date.now(); let complete = false;
   while (Date.now() - t1 < 70000) {
     const rs = await ev("document.readyState").catch(() => null);
-    if (rs === "complete") { complete = true; break; }
+    // "interactive" = the document is parsed and shown; a stuck image or tracker keeps it from "complete"
+    // (nalog.gov.ru stays "interactive" when its image host resets HTTP/2 streams). Only a document that never
+    // got that far is a timeout.
+    if (rs === "complete" || rs === "interactive") { complete = true; break; }
     await sleep(500);
   }
-  await sleep(4000); // let client-side rendering and any anti-bot interstitial appear
-  const info = await ev(`(() => { const t = document.body ? document.body.innerText : ''; const h = document.documentElement.outerHTML; return JSON.stringify({ url: location.href, title: document.title, textLen: t.length, text: t.slice(0, 4000), htmlCaptcha: /captcha|smartcaptcha|ddos-guard|qrator|challenge-platform/i.test(h), links: document.querySelectorAll('a').length, imgs: document.querySelectorAll('img').length }); })()`).then((s) => JSON.parse(s)).catch(() => null);
+  // Single-page apps render long after readyState=complete (Gosuslugi needed ~30 s over the tunnel): wait until the
+  // visible text has stopped changing (3 equal readings, 3 s apart) or the overall limit of 90 s from navigation.
+  const series = []; let stable = false;
+  while (Date.now() - t1 < 90000) {
+    await sleep(3000);
+    series.push(await ev("document.body ? document.body.innerText.length : -1").catch(() => -1));
+    const n = series.length;
+    if (n >= 3 && series[n - 1] === series[n - 2] && series[n - 2] === series[n - 3] && series[n - 1] >= 200) { stable = true; break; }
+  }
+  if (!stable && series.length >= 3) { const n = series.length; stable = series[n - 1] === series[n - 2] && series[n - 2] === series[n - 3]; }
+  let info = null;
+  for (let attempt = 0; attempt < 3 && !info; attempt++) { // the page may be mid-navigation for a moment
+    info = await ev(DOM_PROBE).then((s) => JSON.parse(s)).catch(() => null);
+    if (!info) await sleep(2000);
+  }
   r.seconds = Math.round((Date.now() - t1) / 1000);
+  r.textSeries = series;
   if (!info) { r.state = "ошибка"; r.error = "страница не отвечает"; }
   else {
     r.finalHost = new URL(info.url.startsWith("http") ? info.url : "http://x/").host;
-    r.title = info.title; r.textLen = info.textLen; r.links = info.links;
-    const errCode = (info.text.match(/ERR_[A-Z0-9_]+/) || [""])[0];
-    const isErrorPage = info.url.startsWith("chrome-error://") || !!errCode;
-    r.captcha = CAPTCHA.test(info.title + " " + info.text) || info.htmlCaptcha;
-    r.denied = DENIED.test(info.title) || (info.textLen < 3000 && DENIED.test(info.text));
-    if (isErrorPage) { r.state = "ошибка соединения"; r.error = errCode || "страница ошибки Chrome"; }
-    else if (!complete) { r.state = "таймаут"; r.error = "страница не загрузилась за 70 с"; }
-    else if (r.captcha) { r.state = "Критерий не пройден: капча"; }
-    else if (r.denied) { r.state = "отказ сайта"; r.error = "страница отказа в доступе"; }
-    else if (info.textLen < 200) { r.state = "пусто"; r.error = "страница почти без видимого содержимого"; }
-    else r.state = "открылась";
+    r.title = info.title; r.textLen = info.textLen; r.visibleCaptchaElements = info.visibleCaptchaElements;
+    Object.assign(r, classifyPage({ ...info, complete, stable }));
+    r.captcha = r.state === "Критерий не пройден: капча";
   }
   try { await browser.send("Target.activateTarget", { targetId }); const { data } = await browser.send("Page.captureScreenshot", { format: "png" }, sid); writeFileSync(join(shots, `real-${site.id}.png`), Buffer.from(data, "base64")); r.screenshot = `.local\\logs\\shots\\real-${site.id}.png`; } catch (e) { r.screenshot = "нет: " + e.message; }
   await browser.send("Target.closeTarget", { targetId }).catch(() => {});

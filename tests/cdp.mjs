@@ -7,7 +7,8 @@ export const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class Cdp {
-  constructor(url) { this.url = url; this.id = 0; this.pending = new Map(); }
+  constructor(url) { this.url = url; this.id = 0; this.pending = new Map(); this.listeners = []; }
+  onEvent(fn) { this.listeners.push(fn); }
   open() {
     return new Promise((res, rej) => {
       this.ws = new WebSocket(this.url);
@@ -17,6 +18,7 @@ export class Cdp {
       this.ws.onmessage = (ev) => {
         const m = JSON.parse(ev.data);
         if (m.id && this.pending.has(m.id)) { const p = this.pending.get(m.id); this.pending.delete(m.id); m.error ? p.rej(new Error(m.error.message)) : p.res(m.result); }
+        else if (m.method) for (const f of this.listeners) f(m);
       };
     });
   }

@@ -17,7 +17,7 @@ try {
   go vet ./...;  if ($LASTEXITCODE) { throw 'go vet failed' }
   go test ./...; if ($LASTEXITCODE) { throw 'go test failed' }
 } finally { Pop-Location }
-node --test (Join-Path $RunetRoot 'tests\check.test.mjs')
+node --test (Join-Path $RunetRoot 'tests\check.test.mjs') (Join-Path $RunetRoot 'tests\page-verdict.test.mjs')
 if ($LASTEXITCODE) { throw 'node tests failed' }
 
 # 3. fresh dist (only our own output folder)

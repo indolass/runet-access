@@ -20,6 +20,7 @@ func main() {
 	in := flag.String("in", "", "file with the key (one line)")
 	port := flag.Int("port", 0, "local mixed inbound port")
 	out := flag.String("out", "", "config output path")
+	logLevel := flag.String("log", "warn", "sing-box log level (warn, info, debug)")
 	flag.Parse()
 	if *in == "" || *port == 0 || *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: buildcfg -in key.txt -port N -out config.json")
@@ -35,7 +36,7 @@ func main() {
 		fmt.Printf("REJECTED %s: %s\n", kerr.Code, kerr.Message)
 		os.Exit(3)
 	}
-	cfg, err := config.Build(p, config.Inbound{Listen: "127.0.0.1", Port: *port}, config.Routing{Final: "proxy"}, "warn")
+	cfg, err := config.Build(p, config.Inbound{Listen: "127.0.0.1", Port: *port}, config.Routing{Final: "proxy"}, *logLevel)
 	if err != nil {
 		fmt.Println("REJECTED config: the generator refused the profile")
 		os.Exit(3)
