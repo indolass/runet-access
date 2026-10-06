@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,5 +147,47 @@ func TestStateChangingCallsNeedPostAndHeader(t *testing.T) {
 	}
 	if w := apiCall(t, a, "GET", "/api/state", "", false); w.Code != 200 {
 		t.Errorf("state: %d", w.Code)
+	}
+}
+
+func TestFirstChromeNeedsARealChromeExe(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "Application", "chrome.exe")
+	if err := os.MkdirAll(filepath.Dir(good), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(good, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "notchrome.exe")
+	_ = os.WriteFile(other, []byte("x"), 0o644)
+	folder := filepath.Join(dir, "chrome.exe") // a folder named chrome.exe is not a browser
+	_ = os.MkdirAll(folder, 0o755)
+
+	if got := firstChrome([]string{filepath.Join(dir, "missing", "chrome.exe"), other, folder, `"` + good + `"`}); got != good {
+		t.Fatalf("got %q", got)
+	}
+	if got := firstChrome([]string{other, folder}); got != "" {
+		t.Fatalf("must find nothing, got %q", got)
+	}
+}
+
+func TestChromeTestOverrideDoesNotFallBack(t *testing.T) {
+	t.Setenv("RUNET_CHROME_PATH", filepath.Join(t.TempDir(), "nope", "chrome.exe"))
+	if findChrome() != "" {
+		t.Fatal("an override pointing nowhere must mean 'no Chrome', not the installed one")
+	}
+}
+
+func TestWaitForChromeAsksThenLetsTheUserOut(t *testing.T) {
+	t.Setenv("RUNET_CHROME_PATH", filepath.Join(t.TempDir(), "nope", "chrome.exe"))
+	t.Setenv("RUNET_TEST_CHROME_PROMPT", "open,recheck,close")
+	scriptPos = 0
+	var opened []string
+	if got := waitForChrome(func(u string) error { opened = append(opened, u); return nil }); got != "" {
+		t.Fatalf("closing the window must return empty, got %q", got)
+	}
+	if len(opened) != 1 || opened[0] != "https://www.google.com/chrome/" {
+		t.Fatalf("the official page must be opened exactly once: %v", opened)
 	}
 }

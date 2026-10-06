@@ -1,7 +1,8 @@
 # Builds dist\runet-access\ : RunetAccess.exe (launcher) + pinned sing-box + licences + docs.
 # Everything stays inside the repo root (see scripts\env.ps1). Run:  .\scripts\build.ps1
 . "$PSScriptRoot\env.ps1"
-$Version = '0.2.0'
+$Version = (Get-Content (Join-Path $RunetRoot 'VERSION') -Raw).Trim()
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "bad VERSION: $Version" }
 $Dist    = Join-Path $RunetRoot 'dist\runet-access'
 
 # 1. tools (idempotent, hash-verified)
@@ -12,6 +13,8 @@ if (-not (Test-Path (Join-Path $L 'tools\go\bin\go.exe')) -or -not (Test-Path (J
 # 2. checks before building
 Push-Location (Join-Path $RunetRoot 'src\app')
 try {
+  # application manifest (asInvoker, common controls v6, DPI) -> embedded by the linker
+  go run ./cmd/genrsrc cmd/launcher/rsrc_windows_amd64.syso; if ($LASTEXITCODE) { throw 'genrsrc failed' }
   $fmt = gofmt -l .
   if ($fmt) { throw "gofmt: $fmt" }
   go vet ./...;  if ($LASTEXITCODE) { throw 'go vet failed' }

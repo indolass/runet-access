@@ -5,11 +5,12 @@ LICENSE в корне относится к собственному коду п
 | Компонент | Версия / источник | Лицензия | Как используется |
 |---|---|---|---|
 | MagicProxy | `baf56b53edd360f3649a73a3695bd83432a32e7d`, <https://github.com/MagicMaxLabs/MagicProxy> | MIT, © 2026 MagicMax Labs (`third_party/MagicProxy/LICENSE`) | Пакеты `internal/config` и `internal/core` скопированы в `src/app/internal/` с изменениями (см. `docs/CHANGES-FROM-UPSTREAM.md`) |
-| sing-box | v1.13.16, <https://github.com/SagerNet/sing-box/releases/tag/v1.13.16>; zip `sing-box-1.13.16-windows-amd64.zip`, SHA256 `6cbf90ec4ee87122ffce09b73928fb31e763bc1c75a119f79c61d24734c78807` | GPL-3.0-or-later + пункт про имя (`third_party/sing-box/`) | Поставляется **без изменений** как `bin\sing-box.exe`; запускается отдельным процессом. Соответствующий исходный код: <https://github.com/SagerNet/sing-box/tree/v1.13.16> (архив: <https://github.com/SagerNet/sing-box/archive/refs/tags/v1.13.16.tar.gz>). Текст GPL и уведомление лежат в `dist\runet-access\third_party\` |
+| sing-box | v1.13.16, <https://github.com/SagerNet/sing-box/releases/tag/v1.13.16>; zip `sing-box-1.13.16-windows-amd64.zip`, SHA256 `6cbf90ec4ee87122ffce09b73928fb31e763bc1c75a119f79c61d24734c78807` | GPL-3.0-or-later + пункт про имя (`third_party/sing-box/`) | Поставляется **без изменений** как `sing-box.exe` рядом с `RunetAccess.exe`; запускается отдельным процессом. Лицензии и **исходный код** лежат в установленной папке `licenses\sing-box\`: GPL-3.0, LICENSE, архив исходников точной версии (`sing-box-1.13.16-source.tar.gz`, SHA256 `5d8201669387d0caded7a22c71682b3c025afef7bac8704cceabed52ea8bde5d`), письменное предложение на исходники зависимостей (`SOURCE-OFFER.txt`, GPLv3 §6b). Полный комплект с зависимостями (около 440 МБ в архиве) собирает `scripts\make-source-offer.ps1` |
 | Go | 1.26.8 windows-amd64, <https://go.dev/dl/go1.26.8.windows-amd64.zip>, SHA256 `b92c3b2adae85a11ba71fe7216daf0d84e82af4c8ab6c5625807f28622043a59` | BSD-3-Clause | Только инструмент сборки (`.local\tools`); стандартная библиотека Go входит в бинарник хоста |
 | Node.js | уже установлен на машине (v24.19.0) | MIT и др. | Только запуск тестов; в пакет не входит |
+| Inno Setup | 6.7.3, <https://github.com/jrsoftware/issrc/releases/tag/is-6_7_3>, SHA256 `9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732`, подпись Authenticode (Pyrsys B.V.) | Лицензия Inno Setup (<https://jrsoftware.org/files/is/license.txt>) | Только компилятор установщика (`.local	ools\innosetup`); в пакет не входит, но заготовка установщика (Setup stub) входит в `Setup.exe` |
 | Google Chrome | установлен пользователем | Собственная лицензия Google | Не поставляется; запускается как отдельный процесс с отдельным профилем |
 
-Закреплённые версии и хеши проверяются скриптом `scripts/fetch-tools.ps1` (`scripts/tools.lock.json`).
-Перед распространением пакета третьим лицам нужно убедиться, что вместе с ним передаётся этот файл,
-тексты лицензий и ссылка на исходники sing-box (условие GPLv3 §6).
+Закреплённые версии и хеши проверяются скриптами `scripts/fetch-tools.ps1` и `scripts/make-installer.ps1` (`scripts/tools.lock.json`):
+установщик не собирается, если sing-box не совпал с закреплённым выпуском или архив исходников не совпал по хешу.
+Состав каждого установщика (файлы, хеши, коммит Git, версии компонентов) пишется в `BUILD-INFO` и `*.contents.txt`.

@@ -1,0 +1,22 @@
+﻿SING-BOX: ИСХОДНЫЙ КОД И ПИСЬМЕННОЕ ПРЕДЛОЖЕНИЕ / SOURCE CODE AND WRITTEN OFFER
+
+Вместе с Runet Access поставляется неизменённый sing-box v1.13.16 (sing-box.exe), лицензия GPL-3.0-or-later
+(см. GPL-3.0.txt и LICENSE в этой папке). Runet Access запускает его отдельным процессом.
+
+1. Исходный код самого sing-box v1.13.16 приложен: sing-box-1.13.16-source.tar.gz (в этой папке). Это точный архив
+   тега v1.13.16 с https://github.com/SagerNet/sing-box/archive/refs/tags/v1.13.16.tar.gz (SHA-256 указан в
+   SOURCE-INFO.txt). Состав сборки и тегов описан в файлах Makefile и release/ внутри архива.
+
+2. Исходный код библиотек, от которых зависит sing-box, не приложен из-за размера (около 1,6 ГБ). Их точные версии
+   и контрольные суммы зафиксированы в go.mod и go.sum внутри архива, а сами библиотеки общедоступны через
+   публичный прокси модулей Go (https://proxy.golang.org).
+
+3. Письменное предложение (GPLv3, раздел 6b): по запросу мы предоставим полный комплект исходного кода sing-box
+   v1.13.16 вместе с исходным кодом зависимостей (готовый архив) любому, кто получил от нас sing-box.exe, за плату не
+   выше стоимости физической передачи копии. Предложение действует не менее трёх лет с даты получения этой программы.
+   Запрос: https://github.com/indolass/runet-access/issues
+
+This product includes sing-box v1.13.16 (GPL-3.0-or-later), unmodified. The source of sing-box itself is included
+(sing-box-1.13.16-source.tar.gz). Sources of its Go dependencies (about 1.6 GB) are pinned by go.mod/go.sum in that
+archive and publicly available; on request we will provide the complete corresponding source including dependencies
+(GPLv3 section 6b), valid for at least three years. Requests: https://github.com/indolass/runet-access/issues

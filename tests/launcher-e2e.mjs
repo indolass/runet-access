@@ -6,7 +6,7 @@
 // and (one step) the public page https://www.nalog.gov.ru/ is requested through the synthetic tunnel.
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, mkdirSync, statSync, readdirSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -14,7 +14,9 @@ import { root, connectBrowser, pageWhere, openPage, sleep } from "./cdp.mjs";
 import { startMock, startSyntheticServer, freePort, portOpen, until, MOCK_HOST } from "./support.mjs";
 
 const run = promisify(execFile);
-const exe = join(root, "dist", "runet-access", "RunetAccess.exe");
+// RUNET_EXE: run the same checks against an INSTALLED copy (tests/installer-check.ps1 does this)
+const exe = process.env.RUNET_EXE || join(root, "dist", "runet-access", "RunetAccess.exe");
+const exeDir = dirname(exe);
 const home = join(root, ".local", "e2e-home");
 const profile = join(home, "profile");
 const openLog = join(root, ".local", "e2e-open.log");
@@ -31,7 +33,7 @@ async function ours() {
   const out = await ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'sing-box.exe','RunetAccess.exe','chrome.exe' } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress");
   if (!out.trim()) return [];
   const j = JSON.parse(out); const all = Array.isArray(j) ? j : [j];
-  const dist = join(root, "dist", "runet-access").toLowerCase();
+  const dist = exeDir.toLowerCase();
   return all.filter((p) => ((p.ExecutablePath || "").toLowerCase().startsWith(dist)) || (p.Name === "chrome.exe" && (p.CommandLine || "").toLowerCase().includes(profile.toLowerCase())));
 }
 const cores = async () => (await ours()).filter((p) => p.Name === "sing-box.exe");

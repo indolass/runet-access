@@ -92,10 +92,12 @@ func main() {
 		fatal("Runet Access уже запущен.")
 	}
 
-	chrome := findChrome()
-	if chrome == "" {
+	holdAppMutex() // lets the installer see that the program is running
+	opener := openerFromEnv()
+	chrome := waitForChrome(opener)
+	if chrome == "" { // the user closed the "Chrome is needed" window: a normal way out
 		release()
-		fatal("Не найден Google Chrome. Установите Chrome и запустите Runet Access снова.")
+		os.Exit(0)
 	}
 
 	// Anything the core spawns dies with us, however we die.
@@ -108,20 +110,9 @@ func main() {
 
 	a := &app{home: home, chrome: chrome, profile: filepath.Join(home, "profile"), mgr: mgr,
 		store: keyStore{path: filepath.Join(home, "key.dpapi")}, phase: phaseIdle,
-		probeOverride: os.Getenv("RUNET_PROBE_URL"), releaseLock: release, openExternal: shellOpen}
+		probeOverride: os.Getenv("RUNET_PROBE_URL"), releaseLock: release, openExternal: opener}
 	if v, err := strconv.Atoi(os.Getenv("RUNET_RECHECK_MS")); err == nil && v >= 500 { // test only
 		a.recheckMs = v
-	}
-	if lf := os.Getenv("RUNET_OPEN_LOG"); lf != "" { // test only: record the link instead of opening it
-		a.openExternal = func(u string) error {
-			f, err := os.OpenFile(lf, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			_, err = fmt.Fprintln(f, u)
-			return err
-		}
 	}
 	tok := make([]byte, 16)
 	_, _ = rand.Read(tok)
@@ -189,22 +180,78 @@ func chromeArgs(profileDir string, proxyPort int) []string {
 	return args
 }
 
+// chromeInstallURL is Google's own page for getting Chrome. We open it only on the user's click.
+const chromeInstallURL = "https://www.google.com/chrome/"
+
+// openerFromEnv returns the function that hands an address to Windows. Test only: with
+// RUNET_OPEN_LOG set, addresses are appended to that file instead of being opened.
+func openerFromEnv() func(string) error {
+	lf := os.Getenv("RUNET_OPEN_LOG")
+	if lf == "" {
+		return shellOpen
+	}
+	return func(u string) error {
+		f, err := os.OpenFile(lf, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = fmt.Fprintln(f, u)
+		return err
+	}
+}
+
+// waitForChrome returns the path of an installed Chrome. When there is none it shows a small
+// window (see chrome_prompt_windows.go) and keeps asking until Chrome appears or the user
+// closes the window, in which case it returns "".
+func waitForChrome(open func(string) error) string {
+	for {
+		if p := findChrome(); p != "" {
+			return p
+		}
+		switch showChromeMissing() {
+		case dlgOpen:
+			_ = open(chromeInstallURL)
+		case dlgRecheck:
+		default:
+			return ""
+		}
+	}
+}
+
+// findChrome looks for an installed Google Chrome: the standard per-machine and per-user
+// folders first, then the path Chrome registers for itself.
 func findChrome() string {
-	if p := os.Getenv("RUNET_CHROME_PATH"); p != "" {
-		if _, err := os.Stat(p); err == nil {
+	if p := os.Getenv("RUNET_CHROME_PATH"); p != "" { // test only
+		if isFile(p) {
 			return p
 		}
 		return ""
 	}
+	var cands []string
 	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"} {
 		if base := os.Getenv(env); base != "" {
-			p := filepath.Join(base, "Google", "Chrome", "Application", "chrome.exe")
-			if _, err := os.Stat(p); err == nil {
-				return p
-			}
+			cands = append(cands, filepath.Join(base, "Google", "Chrome", "Application", "chrome.exe"))
+		}
+	}
+	cands = append(cands, chromeFromRegistry()...)
+	return firstChrome(cands)
+}
+
+// firstChrome returns the first candidate that is a real file named chrome.exe.
+func firstChrome(cands []string) string {
+	for _, p := range cands {
+		p = strings.Trim(p, `"`)
+		if strings.EqualFold(filepath.Base(p), "chrome.exe") && isFile(p) {
+			return p
 		}
 	}
 	return ""
+}
+
+func isFile(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 // openGuard holds the proxy port while the core is not running. Connections are accepted
