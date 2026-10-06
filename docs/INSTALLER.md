@@ -16,6 +16,7 @@
 | `BUILD-INFO.txt` | коммит Git, дата, версии Go, sing-box, Inno Setup, пометка «не подписано» |
 | `licenses\LICENSE.txt`, `THIRD_PARTY.txt` | MIT проекта и перечень сторонних компонентов |
 | `licenses\MagicProxy\`, `licenses\Go\` | лицензии MagicProxy (MIT) и Go (BSD-3-Clause, стандартная библиотека входит в `RunetAccess.exe`) |
+| `licenses\go-modules.txt`, `licenses\OutlineSDK\`, `licenses\go-shadowsocks2\`, `licenses\golang-x\` | с 0.5.0: перечень закреплённых Go-библиотек, скомпилированных в `RunetAccess.exe` (Outline SDK, go-shadowsocks2 `socks`, x/crypto, x/sys) с версиями и хешами из `go.sum`, и их лицензии (Apache-2.0, BSD-3-Clause). Сборка (`build.ps1`) останавливается, если связанный набор модулей или хеши в `go.sum` отличаются от закреплённых в `tools.lock.json` |
 | `licenses\sing-box\` | `GPL-3.0.txt`, `LICENSE`, `SOURCE-OFFER.txt`, `SOURCE-INFO.txt`, `sing-box-1.13.16-source.tar.gz` |
 
 Не входят: инструменты сборки, тесты, `.local`, ключи и подписочные ссылки, сохранённые DPAPI-файлы, профили Chrome, cookies,
