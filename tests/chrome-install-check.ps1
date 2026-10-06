@@ -65,6 +65,7 @@ $W_download = Cyr 0x441, 0x43a, 0x430, 0x447, 0x430, 0x442, 0x44c               
 $W_cancelled = Cyr 0x43e, 0x442, 0x43c, 0x435, 0x43d, 0x435, 0x43d, 0x430                                  # "otmenena"
 $W_busy   = Cyr 0x423, 0x441, 0x442, 0x430, 0x43d, 0x43e, 0x432, 0x43a, 0x430, 0x20, 0x47, 0x6f, 0x6f, 0x67, 0x6c, 0x65     # "Ustanovka Google" (heading of the progress window)
 $W_install = Cyr 0x421, 0x43a, 0x430, 0x447, 0x430, 0x442, 0x44c, 0x20, 0x438, 0x20, 0x443, 0x441, 0x442, 0x430, 0x43d, 0x43e, 0x432, 0x438, 0x442, 0x44c   # "Skachat' i ustanovit'"
+$W_pick   = Cyr 0x443, 0x43a, 0x430, 0x437, 0x430, 0x442, 0x44c, 0x20, 0x63, 0x68, 0x72, 0x6f, 0x6d, 0x65, 0x2e, 0x65, 0x78, 0x65   # "ukazat' chrome.exe"
 $W_manual = Cyr 0x432, 0x440, 0x443, 0x447, 0x43d, 0x443, 0x44e                                           # "vruchnuyu"
 
 # ---- fixtures: a harmless unsigned "installer" that leaves a marker if it is ever started ----------------------------
@@ -82,6 +83,7 @@ function Hits() { (Invoke-RestMethod "http://127.0.0.1:$port/__hits") }
 $tmpRoot = Join-Path $env:TEMP 'runet-access'
 function SetupDirs() { @(Get-ChildItem $tmpRoot -Directory -Filter 'chrome-setup-*' -ErrorAction SilentlyContinue).Count }
 
+$env:RUNET_TEST_MODE = '1'   # every override below is ignored by the program without this
 $env:RUNET_ACCESS_HOME = Join-Path $Work 'home'; $env:RUNET_NO_DIALOG = '1'
 $env:RUNET_CHROME_PATH = Join-Path $Work 'no-chrome-here\chrome.exe'      # "Chrome is not installed" (nothing is uninstalled)
 $env:RUNET_OPEN_LOG = Join-Path $Work 'open.log'
@@ -171,21 +173,57 @@ Check 'a redirect to another host is refused (only the official host is followed
   if ((Hits).'/ok.exe' -gt 1) { throw 'the foreign host was contacted' }
   Close-App $p; $true
 }
-# ---- 3. an existing Chrome: no download, no install window ------------------------------------------------------------------
-$env:RUNET_CHROME_PATH = $null; $env:RUNET_CHROME_EXTRA_ARGS = '--remote-debugging-port=9555'
-$env:RUNET_TEST_CHROME_URL = "http://127.0.0.1:$port/ok.exe"
-Check 'Chrome installed (the real one on this computer): detected, no window, no download, nothing installed' {
-  $before = (Hits).'/ok.exe'
-  $p = Start-App; Start-Sleep 7
-  $p.Refresh(); if ($p.HasExited) { throw 'launcher exited' }
-  if ((Dialog $p) -ne [IntPtr]::Zero) { throw "a dialog appeared: $(Texts (Dialog $p))" }
-  $ours = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -match 'chrome-install-test' }).Count
-  if ($ours -lt 1) { throw 'our Chrome did not start' }
-  if ((Hits).'/ok.exe' -ne $before) { throw 'a download was made although Chrome exists' }
-  node -e "const ws=new WebSocket(JSON.parse(require('child_process').execSync('curl -s http://127.0.0.1:9555/json/version')).webSocketDebuggerUrl);ws.onopen=()=>{ws.send(JSON.stringify({id:1,method:'Browser.close'}));setTimeout(()=>process.exit(0),1500)}"
-  if (-not $p.WaitForExit(15000)) { $p.Kill(); throw 'launcher did not exit after the window was closed' }
+# ---- 3. an existing Chrome, ORDINARY launch: no test mode, no overrides at all (only a private data folder) ----------------
+$env:RUNET_TEST_MODE = $null; $env:RUNET_CHROME_PATH = $null; $env:RUNET_TEST_CHROME_URL = $null; $env:RUNET_CHROME_EXTRA_ARGS = $null
+$env:RUNET_TEST_DIALOG_DUMP = $null; $env:RUNET_OPEN_LOG = $null; $env:RUNET_ACCESS_HOME = Join-Path $Work 'home-plain'
+Check 'ORDINARY launch (no test variables): the installed Chrome is found, no window asks for it, our own Chrome window starts' {
+  $p = Start-App; Start-Sleep 8
+  $p.Refresh(); if ($p.HasExited) { throw "the launcher exited (code $($p.ExitCode))" }
+  if ((Dialog $p) -ne [IntPtr]::Zero) { throw 'a dialog appeared although Chrome is installed' }
+  $ours = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -match 'chrome-install-test' })
+  if ($ours.Count -lt 1) { throw 'our Chrome did not start' }
+  $exe = ($ours | Select-Object -First 1).ExecutablePath
+  if ((SetupDirs) -ne 0) { throw 'an installer download was started' }
+  $p.Kill(); Start-Sleep 3                                                # the Job Object takes our core and Chrome with it
+  if (@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -match 'chrome-install-test' }).Count) { throw 'our Chrome outlived the launcher' }
+  Write-Host "      Chrome used: $exe"
   $true
 }
+# ---- 4. "specify chrome.exe": automatic search pretended to fail (test mode), the user points at the real Chrome ----
+$env:RUNET_TEST_MODE = '1'; $env:RUNET_TEST_DIALOG_DUMP = $dump; $env:RUNET_TEST_NO_AUTODETECT = '1'
+$env:RUNET_ACCESS_HOME = Join-Path $Work 'home-pick'
+$realChrome = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe').'(default)'
+Check 'the main window offers "specify chrome.exe"' {
+  $p = Start-App; $h = Wait-Window $p $W_head; if ($h -eq [IntPtr]::Zero) { throw 'no window' }
+  if ((Texts $h) -notmatch [regex]::Escape($W_pick)) { throw "no pick button: $(Texts $h)" }
+  Close-App $p; $true
+}
+Check 'a file that is NOT Google Chrome is refused with the reason (publisher shown) and nothing is remembered' {
+  $fake = Join-Path $Work 'fake\chrome.exe'; New-Item -ItemType Directory -Force -Path (Split-Path $fake) | Out-Null
+  Copy-Item (Join-Path $RunetRoot '.local\cache\downloads\innosetup-6.7.3.exe') $fake    # validly signed, but by someone else
+  $env:RUNET_TEST_CHROME_PICK = $fake
+  $p = Start-App; $h = Wait-Window $p $W_head; Press $h 104
+  $h2 = Wait-Window $p 'Pyrsys' 20; if ($h2 -eq [IntPtr]::Zero) { throw "no refusal with the publisher: $(Texts (Dialog $p))" }
+  $t = Texts $h2; if ($t -notmatch 'Google LLC|Google') { throw $t }
+  if (Test-Path (Join-Path $env:RUNET_ACCESS_HOME 'chrome-path.txt')) { throw 'a refused file was remembered' }
+  Close-App $p; $true
+}
+Check 'the real chrome.exe chosen by the user is accepted, remembered, and used on the next start without any question' {
+  $env:RUNET_TEST_CHROME_PICK = $realChrome
+  $p = Start-App; $h = Wait-Window $p $W_head; Press $h 104
+  $end = (Get-Date).AddSeconds(25); $ok = $false
+  while ((Get-Date) -lt $end -and -not $ok) { Start-Sleep -Milliseconds 500; $ok = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -match 'chrome-install-test' }).Count -ge 1 }
+  if (-not $ok) { throw 'the program did not continue after the file was accepted' }
+  $saved = (Get-Content (Join-Path $env:RUNET_ACCESS_HOME 'chrome-path.txt') -Encoding utf8 | Select-Object -First 1).Trim()
+  if ($saved -ne $realChrome) { throw "remembered: $saved" }
+  $p.Kill(); Start-Sleep 3
+  $env:RUNET_TEST_CHROME_PICK = $null
+  $p = Start-App; Start-Sleep 8; $p.Refresh()
+  if ($p.HasExited) { throw 'second start: launcher exited' }
+  if ((Dialog $p) -ne [IntPtr]::Zero) { throw 'second start: the window asked again' }
+  $p.Kill(); Start-Sleep 3; $true
+}
+$env:RUNET_TEST_NO_AUTODETECT = $null
 Check 'the fake host was only ever asked for the expected paths; no installer ran; no leftovers' {
   if (Test-Path $marker) { throw 'the marker exists' }
   (SetupDirs) -eq 0
@@ -197,6 +235,6 @@ Check 'every window was shown by the modern Windows dialog (hr=0x0), never by th
   ([regex]::Matches($all, 'result: hr=0x0 ')).Count -ge 8
 }
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
-foreach ($v in 'RUNET_TEST_CHROME_URL', 'RUNET_CHROME_EXTRA_ARGS', 'RUNET_ACCESS_HOME', 'RUNET_NO_DIALOG', 'RUNET_OPEN_LOG', 'FIXTURE_MARKER') { Set-Item -Path "Env:\$v" -Value $null -ErrorAction SilentlyContinue }
+foreach ($v in 'RUNET_TEST_MODE', 'RUNET_TEST_CHROME_URL', 'RUNET_CHROME_EXTRA_ARGS', 'RUNET_ACCESS_HOME', 'RUNET_NO_DIALOG', 'RUNET_OPEN_LOG', 'FIXTURE_MARKER', 'RUNET_TEST_DIALOG_DUMP', 'RUNET_TEST_CHROME_PICK', 'RUNET_TEST_NO_AUTODETECT') { Set-Item -Path "Env:\$v" -Value $null -ErrorAction SilentlyContinue }
 Write-Host "`n$script:pass passed, $script:fail failed"
 if ($script:fail) { exit 1 }

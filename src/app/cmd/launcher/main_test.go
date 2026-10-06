@@ -173,6 +173,7 @@ func TestFirstChromeNeedsARealChromeExe(t *testing.T) {
 }
 
 func TestChromeTestOverrideDoesNotFallBack(t *testing.T) {
+	t.Setenv("RUNET_TEST_MODE", "1")
 	t.Setenv("RUNET_CHROME_PATH", filepath.Join(t.TempDir(), "nope", "chrome.exe"))
 	if findChrome() != "" {
 		t.Fatal("an override pointing nowhere must mean 'no Chrome', not the installed one")
@@ -180,6 +181,7 @@ func TestChromeTestOverrideDoesNotFallBack(t *testing.T) {
 }
 
 func TestWaitForChromeAsksThenLetsTheUserOut(t *testing.T) {
+	t.Setenv("RUNET_TEST_MODE", "1")
 	t.Setenv("RUNET_CHROME_PATH", filepath.Join(t.TempDir(), "nope", "chrome.exe"))
 	t.Setenv("RUNET_TEST_CHROME_PROMPT", "open,recheck,close")
 	scriptPos = 0
@@ -189,5 +191,81 @@ func TestWaitForChromeAsksThenLetsTheUserOut(t *testing.T) {
 	}
 	if len(opened) != 1 || opened[0] != "https://www.google.com/chrome/" {
 		t.Fatalf("the official page must be opened exactly once: %v", opened)
+	}
+}
+
+// The guarantee behind "Chrome is installed but the program keeps asking for it": a test override left in the
+// environment by accident must not change anything unless RUNET_TEST_MODE=1 is set as well.
+func TestStrayTestOverridesAreIgnoredWithoutTestMode(t *testing.T) {
+	t.Setenv("RUNET_TEST_MODE", "")
+	missing := filepath.Join(t.TempDir(), "nowhere", "chrome.exe")
+	t.Setenv("RUNET_CHROME_PATH", missing)
+	t.Setenv("RUNET_TEST_CHROME_PROMPT", "close")
+	t.Setenv("RUNET_EXPECTED_COUNTRY", "DE")
+	t.Setenv("RUNET_CHROME_EXTRA_ARGS", "--remote-debugging-port=1")
+	if testEnv("RUNET_CHROME_PATH") != "" || testEnv("RUNET_TEST_CHROME_PROMPT") != "" || testEnv("RUNET_EXPECTED_COUNTRY") != "" {
+		t.Fatal("overrides are honoured outside test mode")
+	}
+	if findChrome() == missing {
+		t.Fatal("the override pointed findChrome at a missing file")
+	}
+	for _, a := range chromeArgs(`C:\p`, 1) {
+		if strings.Contains(a, "remote-debugging") {
+			t.Fatal("extra browser arguments leaked into a normal run")
+		}
+	}
+	if isTestRun() {
+		t.Fatal("a normal run must not look like a test")
+	}
+}
+
+func TestSavedChromeIsUsedOnlyWhenItStillChecksOut(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "chrome.exe")
+	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	savedChromeFile = filepath.Join(dir, "chrome-path.txt")
+	defer func() { savedChromeFile = ""; chromeFileOK = func(string) error { return nil } }()
+	if err := os.WriteFile(savedChromeFile, []byte(exe+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	chromeFileOK = func(string) error { return nil }
+	if savedChrome() != exe {
+		t.Fatal("a valid remembered path was not used")
+	}
+	chromeFileOK = func(string) error { return os.ErrInvalid }
+	if savedChrome() != "" {
+		t.Fatal("a remembered file that no longer verifies must be ignored")
+	}
+	chromeFileOK = func(string) error { return nil }
+	other := filepath.Join(dir, "notepad.exe")
+	_ = os.WriteFile(other, []byte("x"), 0o644)
+	_ = os.WriteFile(savedChromeFile, []byte(other+"\n"), 0o600)
+	if savedChrome() != "" {
+		t.Fatal("only a file named chrome.exe may be remembered")
+	}
+	_ = os.Remove(exe)
+	_ = os.WriteFile(savedChromeFile, []byte(exe+"\n"), 0o600)
+	if savedChrome() != "" {
+		t.Fatal("a missing file must be ignored")
+	}
+}
+
+func TestChromeInAPathWithSpacesAndCyrillic(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Мои программы (x86)", "Google Chrome Браузер", "Application")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(dir, "chrome.exe")
+	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := firstChrome([]string{exe}); got != exe {
+		t.Fatalf("got %q", got)
+	}
+	// the same path as the registry stores it: sometimes in quotes
+	if got := firstChrome([]string{`"` + exe + `"`}); got != exe {
+		t.Fatalf("quoted: got %q", got)
 	}
 }

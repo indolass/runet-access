@@ -66,12 +66,12 @@ Python, Go, Node.js, Git, терминал и права администрат�
 Все кэши, инструменты, временные файлы и профили тестов лежат внутри корня проекта (`scripts\env.ps1`). Тест запускает
 лаунчер с `RUNET_ACCESS_HOME` внутри корня и синтетическим сервером на localhost.
 
-Переменные окружения лаунчера (для тестов): `RUNET_ACCESS_HOME`, `RUNET_CHROME_PATH`, `RUNET_CHROME_EXTRA_ARGS`,
-`RUNET_PROBE_URL` (подмена адреса проверки страны), `RUNET_NO_DIALOG`, `RUNET_OPEN_LOG` (файл, в который вместо открытия
-записываются внешние ссылки), `RUNET_RECHECK_MS` (период фоновой проверки выхода, мс; по умолчанию 60000),
-`RUNET_DIRECT_IP` (фиксированный «обычный» адрес для теста), `RUNET_TEST_CHROME_PROMPT` (заранее заданные ответы окна «Нужен
-Chrome»: `open,recheck,close`), `RUNET_EXPECTED_COUNTRY` (двухбуквенный код: страна, которую должна подтвердить проверка
-выхода; по умолчанию `RU`; проверка остаётся настоящей и отклоняет несовпадение).
+Переменные окружения лаунчера (только для тестов). **Все, кроме `RUNET_ACCESS_HOME` и `RUNET_NO_DIALOG`, игнорируются, пока не задан
+`RUNET_TEST_MODE=1`**, поэтому оставшаяся в среде переменная не может повлиять на обычный запуск: `RUNET_CHROME_PATH`,
+`RUNET_CHROME_EXTRA_ARGS`, `RUNET_PROBE_URL` (подмена адреса проверки страны), `RUNET_OPEN_LOG` (файл вместо открытия внешних ссылок),
+`RUNET_RECHECK_MS`, `RUNET_DIRECT_IP`, `RUNET_EXPECTED_COUNTRY` (проверка остаётся настоящей и отклоняет несовпадение),
+`RUNET_TEST_CHROME_URL`, `RUNET_TEST_CHROME_PROMPT` (заранее заданные ответы окна «Нужен Chrome»: `install,pick,open,recheck,close`),
+`RUNET_TEST_CHROME_PICK`, `RUNET_TEST_NO_AUTODETECT`, `RUNET_TEST_DIALOG_DUMP`. Окна в тестовом режиме помечены «ТЕСТ».
 
 ## Какие ключи принимаются
 

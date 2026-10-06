@@ -118,3 +118,53 @@ func TestShellRunMissingFileIsAnErrorNotADenial(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestPickedChromeIsValidated(t *testing.T) {
+	// the genuine installed Chrome (read only)
+	if _, err := os.Stat(installedChrome); err == nil {
+		info, err := validateChromePick(installedChrome)
+		if err != nil || !strings.Contains(info, "Google LLC") {
+			t.Fatalf("the real Chrome must be accepted: %v\n%s", err, info)
+		}
+	}
+	dir := t.TempDir()
+	// a validly signed program of someone else, renamed chrome.exe
+	other := signedByOther(t)
+	b, _ := os.ReadFile(other)
+	fake := filepath.Join(dir, "chrome.exe")
+	if err := os.WriteFile(fake, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := validateChromePick(fake); err == nil || !strings.Contains(info, "Pyrsys B.V.") {
+		t.Fatalf("someone else's signed program must be refused with the publisher shown: %v\n%s", err, info)
+	}
+	// the same file, one byte changed
+	b[len(b)/2] ^= 0xFF
+	_ = os.WriteFile(fake, b, 0o600)
+	if _, err := validateChromePick(fake); err == nil {
+		t.Fatal("a modified file must be refused")
+	}
+	// wrong name, unsigned, tiny, folder, missing
+	self, _ := os.Executable()
+	sb, _ := os.ReadFile(self)
+	wrong := filepath.Join(dir, "browser.exe")
+	_ = os.WriteFile(wrong, sb, 0o600)
+	if _, err := validateChromePick(wrong); err == nil {
+		t.Fatal("only chrome.exe may be picked")
+	}
+	unsigned := filepath.Join(dir, "sub", "chrome.exe")
+	_ = os.MkdirAll(filepath.Dir(unsigned), 0o700)
+	_ = os.WriteFile(unsigned, sb, 0o600)
+	if _, err := validateChromePick(unsigned); err == nil {
+		t.Fatal("an unsigned chrome.exe must be refused")
+	}
+	tiny := filepath.Join(dir, "tiny", "chrome.exe")
+	_ = os.MkdirAll(filepath.Dir(tiny), 0o700)
+	_ = os.WriteFile(tiny, []byte("MZ"), 0o600)
+	if _, err := validateChromePick(tiny); err == nil {
+		t.Fatal("a tiny file must be refused")
+	}
+	if _, err := validateChromePick(filepath.Join(dir, "missing", "chrome.exe")); err == nil {
+		t.Fatal("a missing file must be refused")
+	}
+}

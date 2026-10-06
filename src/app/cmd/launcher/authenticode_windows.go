@@ -4,6 +4,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unicode/utf16"
@@ -100,16 +102,23 @@ func readPtr(at uintptr) uintptr {
 		uintptr(b[4])<<32 | uintptr(b[5])<<40 | uintptr(b[6])<<48 | uintptr(b[7])<<56
 }
 
-// verifyAuthenticode returns the organisation of the signer when Windows accepts the signature.
-func verifyAuthenticode(path string) (string, error) {
+// verifyAuthenticode returns the organisation of the signer when Windows accepts the signature
+// (including a revocation check of the certificate chain).
+func verifyAuthenticode(path string) (string, error) { return verifyAuthenticodeRev(path, true) }
+
+// verifyAuthenticodeRev is verifyAuthenticode with the revocation lookup optional (it needs the network).
+func verifyAuthenticodeRev(path string, revocation bool) (string, error) {
 	p16, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return "", err
 	}
 	fi := winTrustFileInfo{cbStruct: uint32(unsafe.Sizeof(winTrustFileInfo{})), pcwszFilePath: p16}
 	wd := winTrustData{
-		cbStruct: uint32(unsafe.Sizeof(winTrustData{})), dwUIChoice: wtdUINone, fdwRevocationChecks: wtdRevokeWholeChain,
-		dwUnionChoice: wtdChoiceFile, pFile: &fi, dwStateAction: wtdStateActionVerify, dwProvFlags: wtdRevocationExcludeRoot,
+		cbStruct: uint32(unsafe.Sizeof(winTrustData{})), dwUIChoice: wtdUINone,
+		dwUnionChoice: wtdChoiceFile, pFile: &fi, dwStateAction: wtdStateActionVerify,
+	}
+	if revocation {
+		wd.fdwRevocationChecks, wd.dwProvFlags = wtdRevokeWholeChain, wtdRevocationExcludeRoot
 	}
 	invalidHandle := ^uintptr(0)
 	hr, _, _ := procWinVerifyTrust.Call(invalidHandle, uintptr(unsafe.Pointer(&actionGenericVerifyV2)), uintptr(unsafe.Pointer(&wd)))
@@ -160,4 +169,39 @@ func verifyGoogleSigned(path string) (string, error) {
 		return org, fmt.Errorf("подписано не Google (издатель: %s)", org)
 	}
 	return org, nil
+}
+
+// validateChromePick checks a chrome.exe the user pointed at. The returned text lists what was found.
+func validateChromePick(path string) (string, error) {
+	info := "Файл: " + path + "\n"
+	if !strings.EqualFold(filepath.Base(path), "chrome.exe") {
+		return info, fmt.Errorf("файл называется не chrome.exe")
+	}
+	if st, err := os.Stat(path); err != nil || st.IsDir() || st.Size() < 1<<20 {
+		return info, fmt.Errorf("файл не найден или слишком мал для браузера")
+	}
+	org, err := verifyAuthenticodeRev(path, false)
+	if org != "" {
+		info += "Издатель в подписи: " + org + "\n"
+	}
+	if err != nil {
+		return info, fmt.Errorf("проверка подписи Windows: %v", err)
+	}
+	if org != chromeSignerOrg {
+		return info, fmt.Errorf("подписано не Google (издатель: %s)", org)
+	}
+	return info + "Проверка подписи Windows: действительна\n", nil
+}
+
+func init() {
+	chromeFileOK = func(path string) error {
+		org, err := verifyAuthenticodeRev(path, false)
+		if err != nil {
+			return err
+		}
+		if org != chromeSignerOrg {
+			return fmt.Errorf("подписано не Google")
+		}
+		return nil
+	}
 }

@@ -92,6 +92,7 @@ func main() {
 		fatal("Runet Access уже запущен.")
 	}
 
+	savedChromeFile = filepath.Join(home, "chrome-path.txt")
 	holdAppMutex() // lets the installer see that the program is running
 	opener := openerFromEnv()
 	chrome := waitForChrome(opener)
@@ -110,8 +111,8 @@ func main() {
 
 	a := &app{home: home, chrome: chrome, profile: filepath.Join(home, "profile"), mgr: mgr,
 		store: keyStore{path: filepath.Join(home, "key.dpapi")}, phase: phaseIdle,
-		probeOverride: os.Getenv("RUNET_PROBE_URL"), releaseLock: release, openExternal: opener}
-	if v, err := strconv.Atoi(os.Getenv("RUNET_RECHECK_MS")); err == nil && v >= 500 { // test only
+		probeOverride: testEnv("RUNET_PROBE_URL"), releaseLock: release, openExternal: opener}
+	if v, err := strconv.Atoi(testEnv("RUNET_RECHECK_MS")); err == nil && v >= 500 { // test only
 		a.recheckMs = v
 	}
 	tok := make([]byte, 16)
@@ -174,16 +175,28 @@ func chromeArgs(profileDir string, proxyPort int) []string {
 		"--disable-background-mode", // closing the last window must really end the browser
 		"--no-first-run", "--no-default-browser-check",
 	}
-	if extra := strings.Fields(os.Getenv("RUNET_CHROME_EXTRA_ARGS")); len(extra) > 0 { // test only
+	if extra := strings.Fields(testEnv("RUNET_CHROME_EXTRA_ARGS")); len(extra) > 0 { // test only
 		args = append(args, extra...)
 	}
 	return args
 }
 
+// testMode is true only when RUNET_TEST_MODE=1. Every test override below is honoured ONLY then, so a
+// stray variable left in somebody's environment (RUNET_CHROME_PATH pointing nowhere, a fake country, ...)
+// can never change how the real program behaves.
+func testMode() bool { return os.Getenv("RUNET_TEST_MODE") == "1" }
+
+func testEnv(name string) string {
+	if !testMode() {
+		return ""
+	}
+	return os.Getenv(name)
+}
+
 // openerFromEnv returns the function that hands an address to Windows. Test only: with
 // RUNET_OPEN_LOG set, addresses are appended to that file instead of being opened.
 func openerFromEnv() func(string) error {
-	lf := os.Getenv("RUNET_OPEN_LOG")
+	lf := testEnv("RUNET_OPEN_LOG")
 	if lf == "" {
 		return shellOpen
 	}
@@ -200,8 +213,9 @@ func openerFromEnv() func(string) error {
 
 // waitForChrome returns the path of an installed Chrome. When there is none it shows a small
 // window (see chrome_prompt_windows.go) and keeps asking until Chrome appears or the user
-// closes the window, in which case it returns "". The window can also download and start
-// Google's own installer (chrome_install.go); the result of the last attempt is shown on top.
+// closes the window, in which case it returns "". The window can download and start Google's
+// own installer (chrome_install.go) or let the user point at an existing chrome.exe; the result
+// of the last attempt is shown on top.
 func waitForChrome(open func(string) error) string {
 	note, details := "", ""
 	for {
@@ -211,6 +225,8 @@ func waitForChrome(open func(string) error) string {
 		switch showChromeMissing(note, details) {
 		case dlgInstall:
 			note, details = installChromeInteractive()
+		case dlgPick:
+			note, details = pickExistingChrome()
 		case dlgOpen:
 			note, details = "", ""
 			_ = open(chromeManualURL)
@@ -225,20 +241,48 @@ func waitForChrome(open func(string) error) string {
 // findChrome looks for an installed Google Chrome: the standard per-machine and per-user
 // folders first, then the path Chrome registers for itself.
 func findChrome() string {
-	if p := os.Getenv("RUNET_CHROME_PATH"); p != "" { // test only
+	if p := testEnv("RUNET_CHROME_PATH"); p != "" { // test only
 		if isFile(p) {
 			return p
 		}
 		return ""
 	}
 	var cands []string
+	if testEnv("RUNET_TEST_NO_AUTODETECT") == "1" { // test only: pretend the automatic search found nothing
+		return savedChrome()
+	}
 	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"} {
 		if base := os.Getenv(env); base != "" {
 			cands = append(cands, filepath.Join(base, "Google", "Chrome", "Application", "chrome.exe"))
 		}
 	}
 	cands = append(cands, chromeFromRegistry()...)
-	return firstChrome(cands)
+	if p := firstChrome(cands); p != "" {
+		return p
+	}
+	return savedChrome()
+}
+
+// savedChromeFile is where a chrome.exe chosen by the user ("Указать chrome.exe") is remembered:
+// one line in the program's own data folder (set in main).
+var savedChromeFile string
+
+// chromeFileOK checks that a remembered file is still a genuine Chrome (Windows build: Google's signature).
+var chromeFileOK = func(path string) error { return nil }
+
+func savedChrome() string {
+	if savedChromeFile == "" {
+		return ""
+	}
+	b, err := os.ReadFile(savedChromeFile)
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimSpace(string(b))
+	if !strings.EqualFold(filepath.Base(p), "chrome.exe") || !isFile(p) || chromeFileOK(p) != nil {
+		return ""
+	}
+	return p
 }
 
 // firstChrome returns the first candidate that is a real file named chrome.exe.

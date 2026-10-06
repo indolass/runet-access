@@ -141,7 +141,7 @@ Check 'installed program: all 36 end-to-end checks in real Chrome pass (first ru
 }
 
 # ---- 3. Chrome missing: the plain window, not a crash ---------------------------------------------------
-$env:RUNET_ACCESS_HOME = $Home1; $env:RUNET_CHROME_PATH = (Join-Path $Work 'no-chrome-here\chrome.exe'); $env:RUNET_NO_DIALOG = '1'
+$env:RUNET_TEST_MODE = '1'; $env:RUNET_ACCESS_HOME = $Home1; $env:RUNET_CHROME_PATH = (Join-Path $Work 'no-chrome-here\chrome.exe'); $env:RUNET_NO_DIALOG = '1'
 Check 'Chrome missing (scripted answers: open page, check again, close): official page offered once, exits cleanly, nothing else started' {
   $log = Join-Path $Work 'open.log'; $env:RUNET_OPEN_LOG = $log; $env:RUNET_TEST_CHROME_PROMPT = 'open,recheck,close'
   $p = Start-Process -FilePath $AppExe -PassThru; if (-not $p.WaitForExit(20000)) { $p.Kill(); throw 'launcher did not exit after the user closed the window' }
@@ -182,6 +182,21 @@ public static class WinMsg {
 }
 Remove-Item Env:\RUNET_TEST_DIALOG_DUMP -ErrorAction SilentlyContinue
 Remove-Item Env:\RUNET_CHROME_PATH -ErrorAction SilentlyContinue
+
+# ---- 3b. ORDINARY launch of the INSTALLED program: no test mode, no overrides ------------------------------------------
+Check 'ordinary launch of the installed program (no test variables at all): Chrome is found, no window asks for it, our Chrome window starts' {
+  $saved = @{}; foreach ($v in 'RUNET_TEST_MODE', 'RUNET_CHROME_PATH', 'RUNET_NO_DIALOG', 'RUNET_OPEN_LOG', 'RUNET_TEST_CHROME_PROMPT') { $saved[$v] = (Get-Item "Env:\$v" -ErrorAction SilentlyContinue).Value; Set-Item "Env:\$v" $null }
+  try {
+    $p = Start-Process -FilePath $AppExe -PassThru; Start-Sleep 8; $p.Refresh()
+    if ($p.HasExited) { throw "the launcher exited (code $($p.ExitCode))" }
+    $ours = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -and $_.CommandLine.IndexOf($Home1, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+    if ($ours.Count -lt 1) { throw 'our Chrome window did not start (a "Chrome is needed" window would be on screen)' }
+    Write-Host "      Chrome used: $(($ours | Select-Object -First 1).ExecutablePath)"
+    $p.Kill(); Start-Sleep 3
+    if (@(Own-Procs).Count -ne 0) { throw 'processes left after the launcher was stopped' }
+    $true
+  } finally { foreach ($v in $saved.Keys) { Set-Item "Env:\$v" $saved[$v] } }
+}
 
 # ---- 4. running program: setup must ask to close it, never kill it -----------------------------------------
 Check 'program running: Setup does not replace files under it and does not kill the program or Chrome' {
@@ -294,7 +309,7 @@ Check 'the owner key file is untouched' {
   $f = Join-Path $RunetRoot '.local\secrets\test-key.txt'
   (Test-Path $f) -and ((Get-Item $f).Length -gt 0)
 }
-Remove-Item Env:\RUNET_ACCESS_HOME, Env:\RUNET_NO_DIALOG -ErrorAction SilentlyContinue
+Remove-Item Env:\RUNET_ACCESS_HOME, Env:\RUNET_NO_DIALOG, Env:\RUNET_TEST_MODE -ErrorAction SilentlyContinue
 
 Write-Host "`n$script:pass passed, $script:fail failed"
 if ($script:fail) { exit 1 }

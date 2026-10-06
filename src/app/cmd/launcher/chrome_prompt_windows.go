@@ -32,6 +32,7 @@ const (
 	dlgOpen    = 101 // open the official Chrome page (manual installation)
 	dlgRecheck = 102
 	dlgInstall = 103 // download from Google and run the installer
+	dlgPick    = 104 // the user points at an existing chrome.exe
 )
 
 const chromeManualURL = "https://www.google.com/chrome/"
@@ -46,15 +47,8 @@ const (
 	testBanner = "Это тестовое окно разработчика, а не настоящая ошибка."
 )
 
-// isTestRun is true when any override that fakes the environment of this window is set.
-func isTestRun() bool {
-	for _, k := range []string{"RUNET_CHROME_PATH", "RUNET_TEST_CHROME_URL", "RUNET_TEST_CHROME_PROMPT", "RUNET_TEST_DIALOG_DUMP"} {
-		if os.Getenv(k) != "" {
-			return true
-		}
-	}
-	return false
-}
+// isTestRun is true in test mode: every window shown then is marked "ТЕСТ".
+func isTestRun() bool { return testMode() }
 
 func windowTitle() string {
 	if isTestRun() {
@@ -74,7 +68,7 @@ func withTestMark(head, body string) (string, string) {
 // attempt) is shown above the explanation and `details` in the expandable section. RUNET_TEST_CHROME_PROMPT
 // (test only) supplies a comma-separated list of answers ("install,open,recheck,close") instead of a window.
 func showChromeMissing(note, details string) int {
-	if script := os.Getenv("RUNET_TEST_CHROME_PROMPT"); script != "" {
+	if script := testEnv("RUNET_TEST_CHROME_PROMPT"); script != "" {
 		return scriptedAnswer(script)
 	}
 	body := chromeMissingBody
@@ -103,6 +97,8 @@ func scriptedAnswer(script string) int {
 	switch a {
 	case "install":
 		return dlgInstall
+	case "pick":
+		return dlgPick
 	case "open":
 		return dlgOpen
 	case "recheck":
@@ -114,7 +110,7 @@ func scriptedAnswer(script string) int {
 // dumpDialog / dumpResult (test only): RUNET_TEST_DIALOG_DUMP names a file that receives the texts of every
 // dialog shown, so tests can check wording without depending on UI Automation.
 func dumpDialog(title, head, body, expanded string, buttons []tdButton) {
-	lf := os.Getenv("RUNET_TEST_DIALOG_DUMP")
+	lf := testEnv("RUNET_TEST_DIALOG_DUMP")
 	if lf == "" {
 		return
 	}
@@ -130,7 +126,7 @@ func dumpDialog(title, head, body, expanded string, buttons []tdButton) {
 }
 
 func dumpResult(hr uintptr, pressed int32) {
-	if lf := os.Getenv("RUNET_TEST_DIALOG_DUMP"); lf != "" {
+	if lf := testEnv("RUNET_TEST_DIALOG_DUMP"); lf != "" {
 		if f, err := os.OpenFile(lf, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
 			fmt.Fprintf(f, "result: hr=0x%x pressed=%d\n", uint32(hr), pressed)
 			f.Close()
@@ -193,7 +189,7 @@ func taskDialog(o tdOptions) (int32, bool) {
 	var exp, expCtl, colCtl *uint16
 	if o.expanded != "" {
 		flags |= tdfExpandFooter
-		if os.Getenv("RUNET_TEST_DIALOG_DUMP") != "" { // tests photograph the details too
+		if testEnv("RUNET_TEST_DIALOG_DUMP") != "" { // tests photograph the details too
 			flags |= tdfExpandedByDefault
 		}
 		exp, expCtl, colCtl = u16(o.expanded), u16("Скрыть подробности"), u16("Подробности")
@@ -236,6 +232,7 @@ func taskDialogMain(body, expanded string) (int, bool) {
 		flags: tdfAllowCancel | tdfCommandLinks, common: tdcbfClose, icon: iconWarning, head: chromeMissingHead, body: body,
 		buttons: []tdButton{
 			{dlgInstall, "Скачать и установить Chrome"},
+			{dlgPick, "Chrome уже установлен: указать chrome.exe"},
 			{dlgOpen, "Открыть страницу Chrome (вручную)"},
 			{dlgRecheck, "Проверить снова"},
 		}, def: dlgInstall, expanded: expanded,
@@ -244,7 +241,7 @@ func taskDialogMain(body, expanded string) (int, bool) {
 		return 0, false
 	}
 	switch pressed {
-	case dlgInstall, dlgOpen, dlgRecheck:
+	case dlgInstall, dlgPick, dlgOpen, dlgRecheck:
 		return int(pressed), true
 	}
 	return dlgClose, true
@@ -370,10 +367,31 @@ func realInstallDeps(stage func(string)) installDeps {
 	}
 	// Test only: a loopback address stands in for Google's host. It is honoured for loopback only, so it
 	// cannot redirect the download to a real site; the signature requirement is never relaxed.
-	if raw := os.Getenv("RUNET_TEST_CHROME_URL"); raw != "" {
+	if raw := testEnv("RUNET_TEST_CHROME_URL"); raw != "" {
 		if u, err := url.Parse(raw); err == nil && isLoopbackHost(u.Hostname()) {
 			d.url, d.allowedHosts, d.allowLoopbackHTTP = raw, []string{u.Hostname()}, true
 		}
 	}
 	return d
+}
+
+// pickExistingChrome lets the user point at chrome.exe when automatic search failed. The file is accepted only
+// if it is called chrome.exe and Windows reports a valid signature of "Google LLC" (no revocation lookup, so it
+// also works offline). Accepted paths are remembered in the program's own data folder; nothing else is changed.
+func pickExistingChrome() (note, details string) {
+	p := testEnv("RUNET_TEST_CHROME_PICK")
+	if p == "" {
+		p = pickChromeFile()
+	}
+	if p == "" { // the user cancelled the file window
+		return "", ""
+	}
+	info, err := validateChromePick(p)
+	if err != nil {
+		return "Выбранный файл не похож на настоящий Google Chrome. Нужен chrome.exe из папки Google\\Chrome\\Application.", info + "Причина: " + err.Error()
+	}
+	if err := os.MkdirAll(filepath.Dir(savedChromeFile), 0o700); err == nil {
+		err = os.WriteFile(savedChromeFile, []byte(p+"\n"), 0o600)
+	}
+	return "", ""
 }

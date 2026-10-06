@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -71,7 +70,7 @@ func (a *app) routes(srvPort int) http.Handler {
 		}
 		// Test only: lets a foreign test server be checked end to end. The check itself stays real
 		// (the exit country must equal this value, otherwise the connection is refused); the default is RU.
-		if cc := strings.ToUpper(os.Getenv("RUNET_EXPECTED_COUNTRY")); len(cc) == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z' {
+		if cc := strings.ToUpper(testEnv("RUNET_EXPECTED_COUNTRY")); len(cc) == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z' {
 			c.ExpectedCountry = cc
 		}
 		if a.recheckMs > 0 { // test only
@@ -226,7 +225,7 @@ func (a *app) routes(srvPort int) http.Handler {
 // directIP asks a public service for the address of the ordinary (non-proxied) connection.
 func directIP() (string, error) {
 	// Test only: a fixed reference, so an external service cannot make a test flaky.
-	if v := os.Getenv("RUNET_DIRECT_IP"); net.ParseIP(v) != nil {
+	if v := testEnv("RUNET_DIRECT_IP"); net.ParseIP(v) != nil {
 		return v, nil
 	}
 	cl := &http.Client{

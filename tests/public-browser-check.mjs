@@ -37,7 +37,7 @@ const sysProxy = async () => (await run("reg", ["query", "HKCU\\Software\\Micros
 async function launch(env) {
   rmSync(home, { recursive: true, force: true });
   const port = await freePort();
-  const child = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_ACCESS_HOME: home, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${port}`, RUNET_NO_DIALOG: "1", ...env } });
+  const child = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_TEST_MODE: "1", RUNET_ACCESS_HOME: home, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${port}`, RUNET_NO_DIALOG: "1", ...env } });
   const exited = new Promise((r) => child.once("exit", r));
   const browser = await connectBrowser(port);
   const control = await pageWhere(browser, (u) => u.startsWith("http://127.0.0.1:"));

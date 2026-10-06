@@ -75,7 +75,7 @@ log("Ключ получен из файла (" + key.length + " символо�
 rmSync(home, { recursive: true, force: true });
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
 const cdpPort = await freePort();
-const child = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_ACCESS_HOME: home, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${cdpPort}`, RUNET_NO_DIALOG: "1" } });
+const child = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_TEST_MODE: "1", RUNET_ACCESS_HOME: home, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${cdpPort}`, RUNET_NO_DIALOG: "1" } });
 const exited = new Promise((r) => child.once("exit", r));
 const browser = await connectBrowser(cdpPort);
 const control = await pageWhere(browser, (u) => u.startsWith("http://127.0.0.1:"));

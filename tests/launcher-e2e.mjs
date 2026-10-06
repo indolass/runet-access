@@ -56,7 +56,7 @@ async function launch() {
   const cdpPort = await freePort();
   const child = spawn(exe, [], {
     stdio: "ignore", windowsHide: false,
-    env: { ...process.env, RUNET_ACCESS_HOME: home, RUNET_PROBE_URL: `http://${MOCK_HOST}/`, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${cdpPort}`,
+    env: { ...process.env, RUNET_TEST_MODE: "1", RUNET_ACCESS_HOME: home, RUNET_PROBE_URL: `http://${MOCK_HOST}/`, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${cdpPort}`,
       RUNET_NO_DIALOG: "1", RUNET_OPEN_LOG: openLog, RUNET_DIRECT_IP: DIRECT_IP, RUNET_RECHECK_MS: "3000" },
   });
   const exited = new Promise((r) => child.once("exit", r));
@@ -124,7 +124,7 @@ try {
   });
 
   await step("second launcher instance is refused (single instance)", async () => {
-    const c2 = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_ACCESS_HOME: home, RUNET_NO_DIALOG: "1" } });
+    const c2 = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_TEST_MODE: "1", RUNET_ACCESS_HOME: home, RUNET_NO_DIALOG: "1" } });
     const code = await Promise.race([new Promise((r) => c2.once("exit", r)), sleep(10000).then(() => "timeout")]);
     assert.equal(code, 1, "second instance exit: " + code);
   });
