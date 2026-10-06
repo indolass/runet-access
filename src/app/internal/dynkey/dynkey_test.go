@@ -384,3 +384,14 @@ func TestOnlyHTTPSIsUsedForTheAddress(t *testing.T) {
 		t.Fatal("only ssconf:// is dynamic")
 	}
 }
+
+func TestRefusalIsDeterministic(t *testing.T) {
+	// two problems at once (a plugin named in two fields): the same, the plugin's own name, is reported every time
+	j := `{"server":"203.0.113.9","server_port":8388,"password":"p","method":"aes-256-gcm","plugin":"v2ray-plugin","plugin_opts":"tls;host=x"}`
+	for i := 0; i < 60; i++ {
+		_, err := Interpret([]byte(j))
+		if err == nil || err.Code != "ss-plugin" || !strings.Contains(err.Message, "v2ray-plugin") {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+}

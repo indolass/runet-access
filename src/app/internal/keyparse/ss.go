@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -205,7 +206,13 @@ func checkSSQuery(query string) ([]byte, *Error) {
 		return nil, fail("broken", "Ключ повреждён или скопирован не целиком. Скопируйте его из бота ещё раз.")
 	}
 	var prefix []byte
-	for k, v := range vals {
+	names := make([]string, 0, len(vals))
+	for k := range vals {
+		names = append(names, k)
+	}
+	sort.Strings(names) // when several things are wrong, the same one is always named
+	for _, k := range names {
+		v := vals[k]
 		switch strings.ToLower(k) {
 		case "outline":
 			// Outline marks its own keys with outline=1; it changes nothing for the connection

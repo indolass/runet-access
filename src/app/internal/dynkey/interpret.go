@@ -3,6 +3,7 @@ package dynkey
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -58,7 +59,8 @@ func fromJSON(b []byte) (*config.Profile, *keyparse.Error) {
 		return ""
 	}
 	var prefix []byte
-	for k, v := range m {
+	for _, k := range sortedKeys(m) {
+		v := m[k]
 		switch strings.ToLower(k) {
 		case "server", "server_port", "password", "method":
 		case "prefix":
@@ -113,7 +115,7 @@ func fromYAML(text string) (*config.Profile, *keyparse.Error) {
 	if _, ok := root["transport"]; !ok {
 		return nil, keyparse.Fail("dyn-yaml", "Настройки ключа содержат неподдерживаемые параметры: в YAML нет раздела transport.")
 	}
-	for k := range root {
+	for _, k := range sortedKeys(root) {
 		if k != "transport" {
 			return nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
 		}
@@ -150,7 +152,7 @@ func fromTransport(t map[string]any) (*config.Profile, *keyparse.Error) {
 	var tcp, udp map[string]any
 	switch ty := typeOf(t); ty {
 	case "tcpudp":
-		for k := range t {
+		for _, k := range sortedKeys(t) {
 			if k != "$type" && k != "tcp" && k != "udp" {
 				return nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
 			}
@@ -185,7 +187,8 @@ func shadowsocksPart(m map[string]any) (host string, port int, method, secret st
 	if ty := typeOf(m); ty != "shadowsocks" {
 		return "", 0, "", "", nil, keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: транспорт «"+keyparse.SafeName(ty)+"» не поддерживается.")
 	}
-	for k, v := range m {
+	for _, k := range sortedKeys(m) {
+		v := m[k]
 		switch k {
 		case "$type", "endpoint", "cipher", "secret":
 		case "prefix":
@@ -210,7 +213,7 @@ func shadowsocksPart(m map[string]any) (host string, port int, method, secret st
 		if ty := typeOf(e); ty != "dial" {
 			return "", 0, "", "", nil, keyparse.Fail("dyn-transport", "Настройки ключа содержат неподдерживаемые параметры: адрес сервера задан способом «"+keyparse.SafeName(ty)+"».")
 		}
-		for k := range e {
+		for _, k := range sortedKeys(e) {
 			if k != "$type" && k != "address" {
 				return "", 0, "", "", nil, keyparse.Fail("dyn-param", "Настройки ключа содержат неподдерживаемые параметры: «"+keyparse.SafeName(k)+"».")
 			}
@@ -224,4 +227,14 @@ func shadowsocksPart(m map[string]any) (host string, port int, method, secret st
 	method, _ = m["cipher"].(string)
 	secret, _ = m["secret"].(string)
 	return h, p, method, secret, prefix, nil
+}
+
+// sortedKeys makes the refusal deterministic: when several things are wrong, the same one is always named.
+func sortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

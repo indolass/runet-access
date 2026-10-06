@@ -16,6 +16,7 @@ $Ver = (Get-Content (Join-Path $RunetRoot 'VERSION') -Raw).Trim()
 if (-not $New) { $New = Join-Path $RunetRoot "dist\installer\RunetAccess-Setup-$Ver.exe" }
 if (-not $Old) { $Old = Join-Path $RunetRoot 'dist\installer\RunetAccess-Setup-0.3.0.exe' }
 foreach ($f in $Old, $New) { if (-not (Test-Path $f)) { throw "missing installer: $f" } }
+$OldVersion = [regex]::Match([IO.Path]::GetFileName($Old), '\d+\.\d+\.\d+').Value   # the version the old installer must report
 $Work = Join-Path $RunetRoot '.local\upgrade-test'
 $data = Join-Path $env:LOCALAPPDATA 'RunetAccess'
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7E2C1A4-5D3F-4E8B-9A16-0C4D7F2E6A31}_is1'
@@ -57,7 +58,7 @@ $sentinels = @{ 'key.dpapi' = [byte[]](1..220); 'profile\Default\Preferences' = 
 try {
   Check 'old version installs (silent, ordinary user, path with spaces and Cyrillic)' {
     if ((Run-Setup $Old) -ne 0) { throw 'setup failed' }
-    $k = Get-ItemProperty $key; if ($k.DisplayVersion -ne '0.3.0') { throw "version $($k.DisplayVersion)" }
+    $k = Get-ItemProperty $key; if ($k.DisplayVersion -ne $OldVersion) { throw "version $($k.DisplayVersion)" }
     Test-Path $AppExe
   }
   $oldExeHash = Sha $AppExe; $oldInfo = Sha (Join-Path $InstallDir 'BUILD-INFO.txt')
@@ -111,6 +112,14 @@ try {
     $last = Get-Content $log -Encoding utf8 | Where-Object { $_ -match 'passed,' } | Select-Object -Last 1
     if ($last -notmatch '^(\d+) passed, 0 failed') { throw "result: $last (see .local\logs\upgrade-keyformats.txt)" }
     $Matches[1] -ge 26
+  }
+  Check 'the UPDATED program carries Outline-prefix keys end to end (prefix e2e against the installed copy)' {
+    $log = Join-Path $RunetRoot '.local\logs\upgrade-prefix.txt'
+    $env:RUNET_EXE = $AppExe
+    try { & (Get-Command node).Source (Join-Path $RunetRoot 'tests\prefix-e2e.mjs') *> $log } finally { Remove-Item Env:\RUNET_EXE }
+    $last = Get-Content $log -Encoding utf8 | Where-Object { $_ -match 'passed,' } | Select-Object -Last 1
+    if ($last -notmatch '^(\d+) passed, 0 failed') { throw "result: $last (see .local\logs\upgrade-prefix.txt)" }
+    $Matches[1] -ge 16
   }
   Check 'uninstall (default answer): program, shortcuts and the Apps entry are gone; user data is KEPT' {
     $u = Join-Path $InstallDir 'unins000.exe'
