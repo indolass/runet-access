@@ -64,11 +64,15 @@ function RunKeys() { ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\Curren
 if (Test-Path $Work) { if ((Split-Path $Work -Leaf) -ne 'inst-test' -or -not $Work.StartsWith($RunetRoot)) { throw 'bad work path' }; Remove-Item -LiteralPath $Work -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Work, $DataRoot, $Home1 | Out-Null
 if (Test-Path $UninstKey) { throw 'a Runet Access installation already exists on this account: refusing to touch it (uninstall it first)' }
-if (Test-Path (Join-Path $env:LOCALAPPDATA 'RunetAccess')) { Write-Host 'NOTE: %LOCALAPPDATA%\RunetAccess exists (real user data): this script never writes there.' }
+$realData = Join-Path $env:LOCALAPPDATA 'RunetAccess'
+function DataListing() { if (Test-Path $realData) { (Get-ChildItem $realData -Force | ForEach-Object { $_.Name + ':' + $_.LastWriteTimeUtc.Ticks }) -join '|' } else { '<absent>' } }
+$data0 = DataListing
+if ($data0 -ne '<absent>') { Write-Host 'NOTE: %LOCALAPPDATA%\RunetAccess exists (real user data, e.g. from an ordinary launch): this script never writes there; it is compared before/after.' }
 $proxy0 = ProxyState; $run0 = RunKeys
 $tasks0 = @(Get-ScheduledTask -ErrorAction SilentlyContinue).Count
 $services0 = @(Get-Service).Count
-$chrome0 = @(Get-Process chrome -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+function ChromeMain() { @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -and $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch [regex]::Escape($Work) } | ForEach-Object { $_.ProcessId }) }
+$chrome0 = ChromeMain
 $localState = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data\Local State'
 $localState0 = if (Test-Path $localState) { (Get-Item $localState).LastWriteTimeUtc.Ticks } else { 0 }
 $desktop0 = @(Lnks $DesktopDir 'Runet Access').Count; $start0 = @(Lnks $ProgramsDir 'Runet Access').Count
@@ -122,8 +126,8 @@ Check 'no autostart, no services, no scheduled tasks, system proxy unchanged' {
   if (@(Get-Service).Count -ne $services0) { throw 'services changed' }
   (ProxyState) -eq $proxy0
 }
-Check 'the installer did not create the user data folder (key and profile appear only when the user connects)' {
-  -not (Test-Path (Join-Path $env:LOCALAPPDATA 'RunetAccess'))
+Check 'the installer did not create or change the real user data folder (key and profile appear only when the user connects)' {
+  (DataListing) -eq $data0
 }
 
 # ---- 2. the installed program works (the whole e2e against the INSTALLED copy) -------------------------
@@ -298,8 +302,8 @@ Check 'system proxy, autostart, scheduled tasks and services identical to before
   if ((ProxyState) -ne $proxy0) { throw 'proxy changed' }
   if ((RunKeys) -ne $run0) { throw 'Run keys changed' }
   if (@(Get-ScheduledTask -ErrorAction SilentlyContinue).Count -ne $tasks0 -or @(Get-Service).Count -ne $services0) { throw 'tasks/services changed' }
-  $now = @(Get-Process chrome -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
-  foreach ($id in $chrome0) { if ($now -notcontains $id) { throw "an ordinary Chrome process ($id) disappeared" } }
+  $now = ChromeMain
+  foreach ($id in $chrome0) { if ($now -notcontains $id) { throw "an ordinary Chrome browser process ($id) disappeared" } }
   $ls = if (Test-Path $localState) { (Get-Item $localState).LastWriteTimeUtc.Ticks } else { 0 }
   # Chrome itself may rewrite it while running; report instead of failing
   if ($ls -ne $localState0) { Write-Host '      (note: Chrome Local State changed by the running ordinary Chrome itself, not by us; the test never touches it)' }
