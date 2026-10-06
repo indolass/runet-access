@@ -34,6 +34,10 @@ import (
 
 var version = "0.3.0-dev"
 
+// maxKeyChars is the longest text accepted as a key. Real keys (vless://, ss://, ssconf://) are well
+// under 2 000 characters; the limit only separates "a key" from "a pasted message" for a plain error.
+const maxKeyChars = 8192
+
 const (
 	phaseIdle       = "idle"
 	phaseConnecting = "connecting"
@@ -344,6 +348,11 @@ func (a *app) closeGuard() {
 // A typed key is saved only later, by verdict(), after its exit has been verified.
 func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string) {
 	typed := strings.TrimSpace(rawKey)
+	// Keys are a few hundred characters; many thousands means the whole message (or more) was pasted.
+	// Said plainly, before any parsing: the text stays in the field so the user can cut it down.
+	if len(typed) > maxKeyChars {
+		return 0, keyparse.ClassFormat, "Текст слишком длинный для ключа. Скопируйте из сообщения бота только сам ключ (ссылку или строку)."
+	}
 	key := typed
 	if key == "" {
 		if saved, err := a.store.load(); err == nil {

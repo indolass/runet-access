@@ -90,7 +90,9 @@ func (a *app) routes(srvPort int) http.Handler {
 			Key      string `json:"key"`
 			Remember bool   `json:"remember"`
 		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body); err != nil {
+		// Generous limit: a key is a few hundred characters, but a paste of a whole message must still
+		// reach connect(), which answers with a plain "too long" message instead of a broken request.
+		if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&body); err != nil {
 			writeJSON(w, 400, map[string]string{"code": "bad", "message": "Некорректный запрос."})
 			return
 		}

@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"runetaccess/internal/keyparse"
 )
 
 func TestValidSiteURL(t *testing.T) {
@@ -147,6 +150,28 @@ func TestStateChangingCallsNeedPostAndHeader(t *testing.T) {
 	}
 	if w := apiCall(t, a, "GET", "/api/state", "", false); w.Code != 200 {
 		t.Errorf("state: %d", w.Code)
+	}
+}
+
+// A paste of a whole message (far longer than any key) is refused with a plain, named reason, before any
+// parsing or change of state; 0.4.0 hit the request-body limit instead and said "Некорректный запрос".
+func TestOverlongKeyIsRefusedPlainly(t *testing.T) {
+	a := testApp(t)
+	a.token = "tok"
+	body, _ := json.Marshal(map[string]any{"key": "ss://" + strings.Repeat("A", maxKeyChars+100), "remember": true})
+	w := apiCall(t, a, "POST", "/api/connect", string(body), true)
+	if w.Code != 400 {
+		t.Fatalf("status %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct{ Code, Message string }
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Code != keyparse.ClassFormat || !strings.Contains(resp.Message, "слишком длинный") {
+		t.Errorf("got %q / %q", resp.Code, resp.Message)
+	}
+	if a.phase != phaseIdle || a.pendingKey != "" || a.store.exists() {
+		t.Error("an overlong key must change nothing")
 	}
 }
 
