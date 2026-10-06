@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -27,6 +28,7 @@ import (
 
 	"runetaccess/internal/config"
 	"runetaccess/internal/core"
+	"runetaccess/internal/dynkey"
 	"runetaccess/internal/keyparse"
 )
 
@@ -353,12 +355,26 @@ func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string
 			a.mu.Unlock()
 		}
 		if key == "" {
-			return 0, "key", "Вставьте ключ подключения."
+			return 0, keyparse.ClassKey, "Вставьте ключ подключения из бота."
 		}
 	}
-	cfg, addr, perr := buildConfig(key, a.proxyPort)
+	// Everything that can be refused is refused BEFORE anything changes: a wrong key, a dynamic key whose
+	// settings cannot be loaded or contain something unsupported leave the previous connection and the saved
+	// key exactly as they were.
+	a.mu.Lock()
+	startGen := a.gen
+	a.mu.Unlock()
+	fctx, fcancel := context.WithTimeout(context.Background(), 25*time.Second)
+	cfg, addr, perr := buildConfig(fctx, key, a.proxyPort)
+	fcancel()
 	if perr != nil {
-		return 0, "key", perr.Message
+		return 0, perr.Class, perr.Message // "format", "key", "unsupported" or "fetch"
+	}
+	a.mu.Lock()
+	cancelledMeanwhile := a.gen != startGen || a.closing
+	a.mu.Unlock()
+	if cancelledMeanwhile { // the user pressed Cancel/Disconnect while the settings were being loaded
+		return 0, "cancelled", ""
 	}
 
 	a.mu.Lock()
@@ -620,16 +636,41 @@ func (a *app) shutdown() {
 	})
 }
 
+// dynOptions are the production settings of the dynamic-key fetch. In test mode (and only there) a local
+// HTTPS stand-in can be trusted and loopback allowed.
+func dynOptions() dynkey.Options {
+	var o dynkey.Options
+	if testMode() {
+		o.AllowLoopback = testEnv("RUNET_TEST_SSCONF_LOOPBACK") == "1"
+		if f := testEnv("RUNET_TEST_SSCONF_CA"); f != "" {
+			if pem, err := os.ReadFile(f); err == nil {
+				o.RootCAs = x509.NewCertPool()
+				o.RootCAs.AppendCertsFromPEM(pem)
+			}
+		}
+	}
+	return o
+}
+
+// resolveProfile turns the key text into a profile: static keys are parsed, dynamic (ssconf://) keys are
+// fetched first, over HTTPS, before any tunnel exists.
+func resolveProfile(ctx context.Context, key string) (*config.Profile, *keyparse.Error) {
+	if keyparse.IsDynamic(key) {
+		return dynkey.Resolve(ctx, key, dynOptions())
+	}
+	return keyparse.Parse(key)
+}
+
 // buildConfig validates the key and returns the core config for the given local port and the
 // server's host:port (for the reachability test only; it is never shown or logged).
-func buildConfig(key string, port int) ([]byte, string, *keyparse.Error) {
-	p, kerr := keyparse.Parse(key)
+func buildConfig(ctx context.Context, key string, port int) ([]byte, string, *keyparse.Error) {
+	p, kerr := resolveProfile(ctx, key)
 	if kerr != nil {
 		return nil, "", kerr
 	}
 	cfg, err := config.Build(p, config.Inbound{Listen: "127.0.0.1", Port: port}, config.Routing{Final: "proxy"}, "warn")
 	if err != nil {
-		return nil, "", &keyparse.Error{Code: "config", Message: "Ключ не удалось применить. Проверьте, что он скопирован целиком."}
+		return nil, "", keyparse.Fail("config", "Ключ не удалось применить. Проверьте, что он скопирован целиком.")
 	}
 	return cfg, net.JoinHostPort(p.Server, strconv.Itoa(p.Port)), nil
 }

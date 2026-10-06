@@ -28,7 +28,10 @@ const STATES = {
   connected: { kind: "ok", text: "Подключено через Россию", acts: ["disconnect"] },
   "err-server": { kind: "err", text: "Сервер недоступен", acts: ["retry", "replace"],
     note: "Проверьте интернет и повторите. Если не помогает, ключ мог устареть: получите новый." },
-  "err-key": { kind: "err", text: "Неверный или неподдерживаемый формат ключа", acts: ["replace"] },
+  "err-key": { kind: "err", text: "Ключ введён неверно или повреждён", acts: ["replace"] },
+  "err-format": { kind: "err", text: "Неизвестный формат ключа", acts: ["replace"] },
+  "err-fetch": { kind: "err", text: "Не удалось загрузить настройки ключа", acts: ["retry", "replace"] },
+  "err-unsupported": { kind: "err", text: "Настройки ключа содержат неподдерживаемые параметры", acts: ["replace"] },
   "err-unconfirmed": { kind: "warn", text: "Не удалось подтвердить страну выхода", acts: ["recheck", "disconnect"],
     note: "Это не значит, что ключ неисправен: сервис проверки мог не ответить. Сайты откроются после подтверждения." },
   "err-wrong": { kind: "err", text: "Выход не в России", acts: ["retry", "replace"],
@@ -184,6 +187,24 @@ function renderDetails() {
   $("detRecheck").disabled = ui.flow !== 0 || !(ui.state === "connected" || ui.state === "err-unconfirmed");
 }
 
+// Pre-connection refusals of the key, by class. The server sends the class as the error code.
+const KEY_STATES = { key: "err-key", format: "err-format", unsupported: "err-unsupported", fetch: "err-fetch" };
+const KEY_TITLES = { format: "Неизвестный формат ключа", unsupported: "Настройки ключа содержат неподдерживаемые параметры", fetch: "Не удалось загрузить настройки ключа" };
+
+// Text under the key field: the class title first (unless the message already starts with it), then the reason.
+function inlineKeyMessage(code, msg) {
+  const title = KEY_TITLES[code];
+  if (!title || msg.startsWith(title)) return msg;
+  return title + ".\n" + msg;
+}
+
+// Reason shown under the status line when there is no key field on screen.
+function statusDetail(code, msg) {
+  const title = KEY_TITLES[code];
+  if (title && msg.startsWith(title)) return msg.slice(title.length).replace(/^[:.]\s*/, "") || "";
+  return msg;
+}
+
 // ---- flows --------------------------------------------------------------------------------
 const flowStart = () => { const my = ++ui.op; ui.flow = my; return my; };
 function flowEnd(my) {
@@ -210,11 +231,12 @@ async function connectFlow({ key = "", remember = false, open = null, fromReplac
     if (!live(my)) return;
     if (!r.ok) {
       const code = r.data.code, msg = r.data.message || "Не удалось подключиться.";
-      if (code === "key") {
-        ui.state = prev.state === "loading" ? "idle" : prev.state; ui.note = prev.note; // nothing was changed
-        if (fromReplace) setText($("newKeyError"), msg + (ui.state === "connected" ? " Прежнее подключение не изменено." : ""));
-        else if (key || currentView() === "first") setText($("keyError"), msg);
-        else setState("err-key", msg);
+      if (KEY_STATES[code]) { // the key was refused before anything changed: format, damaged, unsupported, settings not loaded
+        ui.state = prev.state === "loading" ? "idle" : prev.state; ui.note = prev.note;
+        const text = inlineKeyMessage(code, msg);
+        if (fromReplace) setText($("newKeyError"), text + (ui.state === "connected" ? "\nПрежнее подключение не изменено." : "\nПрежний сохранённый ключ не тронут."));
+        else if (key || currentView() === "first") setText($("keyError"), text);
+        else setState(KEY_STATES[code], statusDetail(code, msg));
       } else if (code === "server") setState("err-server");
       else if (code === "cancelled") { /* a newer operation owns the state */ }
       else setState("err-core", msg);

@@ -34,6 +34,7 @@
 - [План и критерии приёмки](docs/PLAN.md)
 - [Интерфейс и пользовательский сценарий](docs/UX.md)
 - [Установщик: состав, лицензии, подпись, проверки](docs/INSTALLER.md)
+- [Форматы ключей: vless://, ss://, ssconf://](docs/KEY-FORMATS.md)
 - [Запуск](docs/INSTALL.md) и [ручная проверка с реальным ключом](docs/MANUAL-CHECK.md)
 - [Состояние проверок и препятствия](docs/LIMITATIONS.md), [таблица совместимости сайтов](docs/COMPATIBILITY.md)
 - [Разбор MagicProxy по SHA](docs/UPSTREAM-REVIEW.md), [что изменено](docs/CHANGES-FROM-UPSTREAM.md), [сторонние компоненты](THIRD_PARTY.md)

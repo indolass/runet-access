@@ -39,7 +39,7 @@
         <div id="keyForm" class="card">
           <label for="keyInput">Ключ подключения</label>
           <textarea id="keyInput" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"
-            placeholder="vless://…"></textarea>
+            placeholder="Вставьте ключ подключения из бота"></textarea>
           <label class="check"><input type="checkbox" id="remember" checked /> Запомнить на этом компьютере</label>
           <p id="keyError" class="error hidden" role="alert"></p>
           <button id="mainBtn" class="primary big" type="button">Подключиться</button>
@@ -116,7 +116,7 @@
           <div id="replaceForm" class="replace hidden">
             <label for="newKeyInput">Новый ключ</label>
             <textarea id="newKeyInput" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"
-              placeholder="vless://…"></textarea>
+              placeholder="Вставьте ключ подключения из бота"></textarea>
             <label id="newRememberRow" class="check"><input type="checkbox" id="newRemember" checked /> Запомнить на этом компьютере</label>
             <p id="newKeyError" class="error hidden" role="alert"></p>
             <div class="row-actions">
@@ -147,7 +147,7 @@
         <ol class="steps">
           <li>Откройте одного из ботов в Telegram.</li>
           <li>Получите ключ для доступа к российским сайтам из-за границы.</li>
-          <li>Скопируйте строку, начинающуюся с <code>vless://</code>.</li>
+          <li>Скопируйте ключ целиком (ссылку или строку).</li>
           <li>Вставьте её в поле и нажмите «Подключиться».</li>
         </ol>
         <ul class="bots">
@@ -167,6 +167,9 @@
             </div>
           </li>
         </ul>
+        <p class="note">Формат ключа определяется автоматически. Поддерживаются: ключи VLESS (<code>vless://</code>), Shadowsocks и Outline
+          (<code>ss://</code>) и динамические ключи Outline (<code>ssconf://</code>; настройки такого ключа программа загружает сама при подключении).
+          Не поддерживаются ключи с «префиксом» Outline, плагинами и другими видами транспорта: программа назовёт, чего именно не хватает.</p>
         <p class="note">Это сторонние сервисы: мы не отвечаем за их условия и не можем обещать, что любой ключ заработает.
           Ссылка откроется в вашем обычном браузере или в Telegram — до подключения этот браузер в интернет не выходит.</p>
         <p class="ext-note error hidden" role="alert"></p>

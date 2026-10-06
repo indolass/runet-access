@@ -1,9 +1,13 @@
 // Package keyparse validates the pasted access key and turns it into a sing-box profile.
 //
-// Two key shapes are accepted, both VLESS:
-//   - Reality over plain TCP with flow xtls-rprx-vision (the original scenario);
-//   - TLS over WebSocket (what the HLVPN support actually issued for "Рунет"; verified to work
-//     in an independent Xray client).
+// Accepted static keys:
+//   - vless:// Reality over plain TCP with flow xtls-rprx-vision (the original scenario);
+//   - vless:// TLS over WebSocket (what the HLVPN support actually issued for "Рунет"; verified to work
+//     in an independent Xray client);
+//   - ss:// Shadowsocks (SIP002, the legacy base64 form and Outline static keys), see ss.go.
+//
+// ssconf:// (Outline dynamic keys) is recognised here (IsDynamic) but fetched and interpreted by package
+// dynkey: this package never touches the network.
 //
 // TLS certificate verification is never switched off: keys that ask for allowInsecure are
 // refused. Error messages never contain any part of the key.
@@ -19,15 +23,46 @@ import (
 	"runetaccess/internal/config"
 )
 
-// Error carries a stable code (for tests/UI logic) and a message safe to show to the user.
+// Error classes (what the interface tells the user apart):
+//   - ClassFormat       the text is not a key we know (unknown scheme);
+//   - ClassKey          a known format with a damaged or incomplete key;
+//   - ClassUnsupported  a known format that asks for something we do not support (and will not silently drop);
+//   - ClassFetch        the dynamic key's settings could not be loaded.
+const (
+	ClassFormat      = "format"
+	ClassKey         = "key"
+	ClassUnsupported = "unsupported"
+	ClassFetch       = "fetch"
+)
+
+// Error carries a stable code (for tests/UI logic), its class and a message safe to show to the user.
 type Error struct {
 	Code    string
+	Class   string
 	Message string
 }
 
 func (e *Error) Error() string { return e.Message }
 
-func fail(code, msg string) *Error { return &Error{Code: code, Message: msg} }
+// Codes that mean "understood, but not supported".
+var unsupportedCodes = map[string]bool{
+	"unsupported": true, "transport": true, "encryption": true, "insecure": true, "packet": true,
+	"ss-cipher": true, "ss-legacy-cipher": true, "ss-plugin": true, "ss-prefix": true, "ss-param": true,
+	"dyn-yaml": true, "dyn-format": true, "dyn-param": true, "dyn-transport": true,
+}
+
+func fail(code, msg string) *Error {
+	class := ClassKey
+	switch {
+	case code == "scheme":
+		class = ClassFormat
+	case unsupportedCodes[code]:
+		class = ClassUnsupported
+	case strings.HasPrefix(code, "fetch"):
+		class = ClassFetch
+	}
+	return &Error{Code: code, Class: class, Message: msg}
+}
 
 var (
 	uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -48,11 +83,46 @@ func truthy(v string) bool {
 	return false
 }
 
+// UnknownFormatMsg is shown for a text whose scheme we do not know. It names exactly what is supported.
+const UnknownFormatMsg = "Неизвестный формат ключа. Поддерживаются ключи vless://, ss:// (Shadowsocks и Outline) и ssconf:// (динамические ключи Outline)."
+
+// schemeLen returns the length of "scheme://" at the start of text, or 0.
+func schemeLen(text string) int {
+	i := strings.Index(text, "://")
+	if i < 1 || i > 12 {
+		return 0
+	}
+	return i + 3
+}
+
+// IsDynamic reports whether the text is an Outline dynamic key (ssconf://). Such a key must be resolved
+// with package dynkey before it can be turned into a profile.
+func IsDynamic(raw string) bool {
+	t := strings.TrimSpace(raw)
+	return len(t) >= 9 && strings.EqualFold(t[:9], "ssconf://")
+}
+
+// Clean applies the same pre-processing as Parse (display name after '#' dropped, a single line required)
+// and returns the key text without the fragment.
+func Clean(raw string) (string, *Error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return "", fail("empty", "Вставьте ключ подключения из бота.")
+	}
+	if i := strings.Index(text, "#"); i >= 0 {
+		text = text[:i]
+	}
+	if strings.IndexFunc(text, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 {
+		return "", fail("multi", "Вставьте один ключ целиком, без пробелов и переносов строк.")
+	}
+	return text, nil
+}
+
 // Parse validates raw and returns the profile for the core.
 func Parse(raw string) (*config.Profile, *Error) {
 	text := strings.TrimSpace(raw)
 	if text == "" {
-		return nil, fail("empty", "Вставьте ключ из Telegram.")
+		return nil, fail("empty", "Вставьте ключ подключения из бота.")
 	}
 	// The part after '#' is only a display name given by the provider ("Server 1", in any
 	// language). It may contain spaces and plays no role in the connection, so drop it first.
@@ -62,12 +132,19 @@ func Parse(raw string) (*config.Profile, *Error) {
 	if strings.IndexFunc(text, func(r rune) bool { return r == ' ' || r == '\t' || r == '\r' || r == '\n' }) >= 0 {
 		return nil, fail("multi", "Вставьте один ключ целиком, без пробелов и переносов строк.")
 	}
-	if !strings.HasPrefix(strings.ToLower(text), "vless://") {
-		return nil, fail("scheme", "Нужен ключ, который начинается с vless://")
+	switch strings.ToLower(text[:schemeLen(text)]) {
+	case "vless://":
+		// handled below
+	case "ss://":
+		return parseShadowsocks(text)
+	case "ssconf://":
+		return nil, fail("dynamic", "Это динамический ключ (ssconf://): его настройки загружаются при подключении.")
+	default:
+		return nil, fail("scheme", UnknownFormatMsg)
 	}
 	u, err := url.Parse(text)
 	if err != nil || u.Host == "" {
-		return nil, fail("broken", "Ключ повреждён или скопирован не целиком. Скопируйте его из Telegram ещё раз.")
+		return nil, fail("broken", "Ключ повреждён или скопирован не целиком. Скопируйте его из бота ещё раз.")
 	}
 	q := u.Query()
 	id := ""

@@ -65,3 +65,42 @@ export async function startSyntheticServer(mockPort, reuse) {
     cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} },
   };
 }
+
+/** Real Shadowsocks server (sing-box) on loopback. The host MOCK_HOST is redirected to the local mock, as in the Reality server. */
+export async function startSsServer(mockPort, method = "chacha20-ietf-poly1305", reuse) {
+  const is2022 = method.startsWith("2022-");
+  const password = reuse ? reuse.password : is2022 ? sb("generate", "rand", "--base64", method.includes("128") ? "16" : "32") : "Pa55-" + sb("generate", "uuid");
+  const port = reuse ? reuse.port : await freePort();
+  const dir = mkdtempSync(join(process.env.TEMP, "ssrv-"));
+  const cfg = join(dir, "server.json");
+  writeFileSync(cfg, JSON.stringify({
+    log: { level: "info", timestamp: true },
+    inbounds: [{ type: "shadowsocks", listen: "127.0.0.1", listen_port: port, method, password }],
+    outbounds: [{ type: "direct", tag: "direct" }],
+    route: { rules: [{ domain: [MOCK_HOST], action: "route", outbound: "direct", override_address: "127.0.0.1", override_port: mockPort }], final: "direct" },
+  }));
+  const chk = spawnSync(serverBox, ["check", "-c", cfg], { encoding: "utf8" });
+  if (chk.status !== 0) throw new Error("shadowsocks server config invalid: " + (chk.stdout + chk.stderr).slice(0, 400));
+  const proc = spawn(serverBox, ["run", "-c", cfg], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const h = { log: "" };
+  proc.stdout.on("data", (d) => (h.log += d)); proc.stderr.on("data", (d) => (h.log += d));
+  if (!(await until(() => portOpen(port), 8000))) throw new Error("shadowsocks server did not start: " + h.log.slice(0, 400));
+  const b64url = (x) => Buffer.from(x).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // Outline style for ordinary ciphers (base64url userinfo); AEAD-2022 keys are percent-encoded, not base64 (SIP002)
+  const key = is2022
+    ? `ss://${method}:${encodeURIComponent(password)}@127.0.0.1:${port}#Server%202022`
+    : `ss://${b64url(method + ":" + password)}@127.0.0.1:${port}/?outline=1#%D0%9D%D0%B0%D0%B7%D0%B0%D0%B4%20%D0%B2%20%D0%A1%D0%A1%D0%A1%D0%A0`;
+  return {
+    key, method, password, port, h, proc, creds: { password, port },
+    json: (extra = {}) => JSON.stringify({ server: "127.0.0.1", server_port: port, password, method, ...extra }),
+    stop() { proc.kill(); },
+    cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} },
+  };
+}
+
+/** Self-signed certificate and key for `name` (for the local HTTPS stand-in of a key provider). */
+export function tlsPair(name = "localhost") {
+  const out = sb("generate", "tls-keypair", name, "-m", "3");
+  const i = out.indexOf("-----BEGIN CERTIFICATE-----");
+  return { key: out.slice(0, i).trim() + "\n", cert: out.slice(i).trim() + "\n" };
+}

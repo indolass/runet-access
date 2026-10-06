@@ -16,7 +16,7 @@ import { classifyPage, DOM_PROBE } from "./page-verdict.mjs";
 const run = promisify(execFile);
 const exe = join(root, "dist", "runet-access", "RunetAccess.exe");
 const home = join(root, ".local", "real-home");
-const keyFile = join(root, ".local", "secrets", "test-key.txt");
+const keyFile = process.env.RUNET_KEY_FILE ? join(root, process.env.RUNET_KEY_FILE) : join(root, ".local", "secrets", "test-key.txt"); // RUNET_KEY_FILE: another file under the repo root (never test-key.txt itself is changed)
 const shots = join(root, ".local", "logs", "shots"); mkdirSync(shots, { recursive: true });
 const SITES = [
   { id: "gosuslugi", name: "Госуслуги", url: "https://www.gosuslugi.ru/" },
@@ -47,9 +47,9 @@ let key = "";
         if (Date.now() - stableSince > 3000 && !warned.has(sz)) {
           const t = readFileSync(keyFile, "utf8").trim();
           // the part after '#' is only a display name and may contain spaces
-          if (/^vless:\/\/\S+$/i.test(t.split("#")[0])) { key = t; break; }
+          if (/^(vless|ss|ssconf):\/\/\S+$/i.test(t.split("#")[0])) { key = t; break; }
           warned.add(sz); // look at the file again only after it changes
-          log(`В файле ${sz} байт, но это не одна строка vless://... без пробелов (пробельных символов до #: ${(t.split("#")[0].match(/\s/g) || []).length}; начинается с vless://: ${/^vless:\/\//i.test(t)}). Исправьте файл и сохраните; я жду.`);
+          log(`В файле ${sz} байт, но это не одна строка vless://... без пробелов (пробельных символов до #: ${(t.split("#")[0].match(/\s/g) || []).length}; начинается с vless://, ss:// или ssconf://: ${/^(vless|ss|ssconf):\/\//i.test(t)}). Исправьте файл и сохраните; я жду.`);
         }
       }
       else { lastSize = sz; stableSince = Date.now(); }
@@ -96,7 +96,7 @@ const report = { connect: {}, sites: [] };
 // the key travels only inside this CDP message to the local control page, then the field is cleared
 await control.evaluate(`(() => { const t = document.getElementById('keyInput'); t.value = ${JSON.stringify(key)}; document.getElementById('remember').checked = false; document.getElementById('mainBtn').click(); return 1; })()`);
 key = "";
-const final = /^(Подключено через Россию|Выход не в России|Трафик идёт мимо|Не удалось подтвердить|Сервер недоступен|Соединение прервано|Подключение не запустилось)/;
+const final = /^(Подключено через Россию|Выход не в России|Трафик идёт мимо|Не удалось подтвердить|Сервер недоступен|Соединение прервано|Подключение не запустилось|Не удалось загрузить настройки|Неизвестный формат|Настройки ключа содержат|Ключ введён неверно)/;
 const t0 = Date.now();
 let st = "";
 while (Date.now() - t0 < 150000) {
@@ -124,6 +124,8 @@ if (!connected) {
   const d = {};
   if (st.startsWith("KEYERR")) d.layer = "ключ (формат): " + st.slice(7);
   else if (/Подключение не запустилось/.test(st)) d.layer = "ядро не запустилось (локально)";
+  else if (/Не удалось загрузить настройки/.test(st)) d.layer = "динамический ключ: настройки не загрузились (см. причину в окне)";
+  else if (/Настройки ключа содержат|Неизвестный формат|Ключ введён неверно/.test(st)) d.layer = "ключ: формат или параметры не поддержаны (см. причину в окне)";
   else if (/Сервер недоступен/.test(st)) d.layer = "сервер ключа не отвечает по TCP";
   else if (/Выход не в России/.test(st)) d.layer = "проверка страны: выход не в RU (" + maskIp(exitRow) + ")";
   else if (/Трафик идёт мимо/.test(st)) d.layer = "проверка страны: адрес выхода совпал с обычным";

@@ -100,7 +100,7 @@ func (a *app) routes(srvPort int) http.Handler {
 			switch code {
 			case "core":
 				status = 500
-			case "server":
+			case "server", "fetch":
 				status = 502
 			case "cancelled":
 				status = 409
