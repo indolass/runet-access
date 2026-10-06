@@ -3,57 +3,176 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>Runet Access</title>
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
     <main>
-      <header>
-        <h1>Runet Access</h1>
-        <span class="proto">прототип</span>
+      <header class="top">
+        <span class="brand">Runet Access</span>
+        <button id="settingsBtn" class="ghost hidden" type="button">Настройки</button>
+        <button id="backBtn" class="ghost hidden" type="button">← К сайтам</button>
       </header>
-      <p class="lead">Это окно браузера целиком работает через ваш ключ. Обычный браузер и другие программы не затрагиваются.</p>
 
-      <section id="keyBlock">
-        <label for="keyInput" id="keyLabel">Ключ из Telegram</label>
-        <textarea id="keyInput" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"
-          placeholder="Вставьте сюда ключ, который начинается с vless://"></textarea>
-        <label class="check" id="rememberRow"><input type="checkbox" id="remember" checked />
-          Запомнить ключ на этом компьютере (хранится зашифрованным средствами Windows)</label>
-        <div id="keySaved" class="saved hidden">
-          <span>Ключ сохранён на этом компьютере.</span>
-          <button id="keyReplace" class="link" type="button">Заменить</button>
-          <button id="keyForget" class="link" type="button">Удалить</button>
+      <section id="statusBar" class="statusbar status--idle" aria-label="Состояние подключения">
+        <span class="dot" aria-hidden="true"></span>
+        <div class="status-body" role="status" aria-live="polite">
+          <span id="statusLine" class="status-text">Загрузка…</span>
+          <span id="statusNote" class="status-note hidden"></span>
         </div>
-        <p id="keyError" class="error hidden" role="alert"></p>
+        <div class="status-actions">
+          <button id="connectBtn" class="primary compact hidden" type="button">Подключиться</button>
+          <button id="retryBtn" class="primary compact hidden" type="button">Повторить</button>
+          <button id="recheckBtn" class="primary compact hidden" type="button">Повторить проверку</button>
+          <button id="replaceBtn" class="secondary hidden" type="button">Заменить ключ</button>
+          <button id="disconnectBtn" class="secondary hidden" type="button">Отключиться</button>
+          <button id="cancelBtn" class="secondary hidden" type="button">Отмена</button>
+        </div>
       </section>
 
-      <button id="mainBtn" class="primary" type="button" disabled>Подключить</button>
+      <!-- ===== первый запуск ===== -->
+      <section id="viewFirst" class="view hidden" aria-labelledby="firstTitle">
+        <h1 id="firstTitle" tabindex="-1">Российские сайты — в отдельном окне</h1>
+        <p class="lead">Подключение действует только в этом браузере.</p>
 
-      <section aria-live="polite">
-        <div id="statusLine" class="status status--idle">Загрузка…</div>
-        <ul id="results" class="results hidden">
-          <li id="resExit"><span class="k">Выход этого окна</span><span class="v"></span></li>
-          <li id="resDirect"><span class="k">Обычное соединение (вне окна)</span><span class="v"></span></li>
-        </ul>
-        <p id="hint" class="hint hidden"></p>
+        <div id="keyForm" class="card">
+          <label for="keyInput">Ключ подключения</label>
+          <textarea id="keyInput" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"
+            placeholder="vless://…"></textarea>
+          <label class="check"><input type="checkbox" id="remember" checked /> Запомнить на этом компьютере</label>
+          <p id="keyError" class="error hidden" role="alert"></p>
+          <button id="mainBtn" class="primary big" type="button">Подключиться</button>
+        </div>
+
+        <div id="getKeyFirst"></div>
       </section>
 
-      <section id="openBlock">
-        <label for="siteUrl">Адрес сайта</label>
-        <div class="row">
-          <input id="siteUrl" type="text" spellcheck="false" placeholder="https://" />
-          <button id="openBtn" class="secondary" type="button" disabled>Открыть</button>
+      <!-- ===== главный экран ===== -->
+      <section id="viewMain" class="view hidden" aria-labelledby="mainTitle">
+        <h1 id="mainTitle" tabindex="-1">Выберите сайт</h1>
+        <p class="lead">Он откроется в соседней вкладке этого браузера.</p>
+
+        <div class="tiles">
+          <button class="tile" type="button" data-url="https://www.gosuslugi.ru/" data-name="Госуслуги">
+            <span class="mono" aria-hidden="true">Г</span>
+            <span class="tile-name">Госуслуги</span>
+            <span class="tile-host">gosuslugi.ru</span>
+          </button>
+          <button class="tile" type="button" data-url="https://www.nalog.gov.ru/" data-name="Налоговая">
+            <span class="mono" aria-hidden="true">Н</span>
+            <span class="tile-name">Налоговая</span>
+            <span class="tile-host">nalog.gov.ru</span>
+          </button>
+          <button class="tile" type="button" data-url="https://minjust.gov.ru/" data-name="Минюст">
+            <span class="mono" aria-hidden="true">М</span>
+            <span class="tile-name">Минюст</span>
+            <span class="tile-host">minjust.gov.ru</span>
+          </button>
         </div>
-        <p class="hint">Сайт откроется в новой вкладке этого окна. Вход, подпись и отправку отчёта вы выполняете сами.
-          Эту вкладку не закрывайте: в ней видно состояние подключения.</p>
-        <button id="recheckBtn" class="secondary hidden" type="button">Проверить выход ещё раз</button>
+        <p id="tileHint" class="hint"></p>
+
+        <form id="otherForm" class="card other" autocomplete="off">
+          <label for="siteUrl">Другой сайт</label>
+          <div class="row">
+            <input id="siteUrl" type="text" spellcheck="false" inputmode="url" placeholder="например, mos.ru" />
+            <button id="openBtn" class="secondary strong" type="submit">Открыть</button>
+          </div>
+          <p id="siteError" class="error hidden" role="alert"></p>
+        </form>
+        <p id="toast" class="toast" role="status" aria-live="polite"></p>
+
+        <details id="details" class="card">
+          <summary>Подробности подключения</summary>
+          <dl class="facts">
+            <div><dt>Выход этого окна</dt><dd id="resExit">—</dd></div>
+            <div><dt>Обычное соединение (вне окна)</dt><dd id="resDirect">—</dd></div>
+            <div><dt>Проверено</dt><dd id="resTime">—</dd></div>
+          </dl>
+          <div class="row-actions">
+            <button id="detRecheck" class="secondary" type="button">Повторить проверку</button>
+            <button id="copyDiag" class="secondary" type="button">Скопировать сведения</button>
+          </div>
+          <pre id="diagText" class="diag" tabindex="0" aria-label="Диагностические сведения"></pre>
+          <p class="note">В сведениях нет ключа и адреса сервера; адреса в них сокращены.</p>
+        </details>
+      </section>
+
+      <!-- ===== настройки ===== -->
+      <section id="viewSettings" class="view hidden" aria-labelledby="settingsTitle">
+        <h1 id="settingsTitle" tabindex="-1">Настройки</h1>
+        <div class="card">
+          <h2>Ключ подключения</h2>
+          <p id="keyStatusText"></p>
+          <div id="settingsActions" class="row-actions">
+            <button id="replaceOpen" class="secondary strong" type="button">Заменить ключ</button>
+            <button id="forgetBtn" class="secondary" type="button">Удалить сохранённый ключ</button>
+          </div>
+          <p id="forgetConfirm" class="confirm hidden" role="group" aria-label="Подтверждение удаления">
+            <span>Удалить сохранённый ключ с этого компьютера?</span>
+            <button id="forgetYes" class="danger" type="button">Да, удалить</button>
+            <button id="forgetNo" class="secondary" type="button">Отмена</button>
+          </p>
+          <div id="replaceForm" class="replace hidden">
+            <label for="newKeyInput">Новый ключ</label>
+            <textarea id="newKeyInput" rows="3" spellcheck="false" autocomplete="off" autocapitalize="off"
+              placeholder="vless://…"></textarea>
+            <label id="newRememberRow" class="check"><input type="checkbox" id="newRemember" checked /> Запомнить на этом компьютере</label>
+            <p id="newKeyError" class="error hidden" role="alert"></p>
+            <div class="row-actions">
+              <button id="replaceGo" class="primary" type="button">Проверить и сохранить</button>
+              <button id="replaceCancel" class="secondary" type="button">Отмена</button>
+            </div>
+            <p id="replaceNote" class="note"></p>
+            <div id="getKeySettings"></div>
+          </div>
+          <p class="note">Ключ хранится только на этом компьютере и зашифрован средствами Windows для вашей учётной записи.
+            Он не отправляется никому, кроме сервера, указанного в самом ключе. Если не сохранять, ключ живёт только до
+            закрытия программы.</p>
+        </div>
       </section>
 
       <footer>
-        <p>Закройте окно браузера, когда закончите: подключение завершится само.</p>
+        <p><button class="link" type="button" data-open="thanks">Спасибо за помощь с подключением — Ускоритель WWW</button>
+          <button class="link" type="button" data-copy="thanks">Скопировать ссылку</button></p>
+        <p class="small">Это канал человека, который помог с подключением, а не служба поддержки Runet Access.
+          Закройте окно браузера, когда закончите: подключение завершится само.</p>
+        <p id="footNote" class="error hidden" role="alert"></p>
       </footer>
     </main>
+
+    <template id="tplGetKey">
+      <details class="card getkey">
+        <summary>Нет ключа?</summary>
+        <ol class="steps">
+          <li>Откройте одного из ботов в Telegram.</li>
+          <li>Получите ключ для доступа к российским сайтам из-за границы.</li>
+          <li>Скопируйте строку, начинающуюся с <code>vless://</code>.</li>
+          <li>Вставьте её в поле и нажмите «Подключиться».</li>
+        </ol>
+        <ul class="bots">
+          <li class="bot">
+            <div class="bot-info"><strong>Назад в СССР</strong><span class="url">t.me/BackInTheUSSR_bot</span></div>
+            <div class="bot-actions">
+              <button type="button" class="secondary" data-open="bot-ussr">Открыть</button>
+              <button type="button" class="secondary" data-copy="bot-ussr">Скопировать ссылку</button>
+            </div>
+          </li>
+          <li class="bot">
+            <div class="bot-info"><strong>HLVPN</strong><span class="url">t.me/hlvpnbot</span>
+              <span class="hint">В боте: «Подключиться → Рунет».</span></div>
+            <div class="bot-actions">
+              <button type="button" class="secondary" data-open="bot-hlvpn">Открыть</button>
+              <button type="button" class="secondary" data-copy="bot-hlvpn">Скопировать ссылку</button>
+            </div>
+          </li>
+        </ul>
+        <p class="note">Это сторонние сервисы: мы не отвечаем за их условия и не можем обещать, что любой ключ заработает.
+          Ссылка откроется в вашем обычном браузере или в Telegram — до подключения этот браузер в интернет не выходит.</p>
+        <p class="ext-note error hidden" role="alert"></p>
+      </details>
+    </template>
+
     <script type="module" src="app.js"></script>
   </body>
 </html>

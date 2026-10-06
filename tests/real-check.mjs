@@ -8,6 +8,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import net from "node:net";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, mkdirSync, writeFileSync, statSync } from "node:fs";
 import { root, connectBrowser, pageWhere, sleep } from "./cdp.mjs";
 import { classifyPage, DOM_PROBE } from "./page-verdict.mjs";
@@ -57,6 +58,8 @@ let key = "";
   }
   if (!key) { log("Ключ так и не появился в файле (или он не начинается с vless://). Проверка не выполнялась."); await cleanup(); process.exit(2); }
 }
+const sha = (f) => (existsSync(f) ? createHash("sha256").update(readFileSync(f)).digest("hex") : "");
+const keyShaBefore = sha(keyFile);
 log("Ключ получен из файла (" + key.length + " символов; содержимое не показывается).");
 {
   // Pre-check the format so a malformed paste does not cost a run (and the file is kept for correction).
@@ -78,28 +81,41 @@ const browser = await connectBrowser(cdpPort);
 const control = await pageWhere(browser, (u) => u.startsWith("http://127.0.0.1:"));
 await control.waitFor("document.getElementById('statusLine').textContent !== 'Загрузка…'", 20000);
 const $ = (id, prop) => control.evaluate(`document.getElementById('${id}').${prop}`);
+const shotControl = async (name) => {
+  try {
+    await control.evaluate("window.scrollTo(0, 0)");
+    await browser.send("Target.activateTarget", { targetId: control.targetId });
+    const { data } = await browser.send("Page.captureScreenshot", { format: "png" }, control.sid);
+    writeFileSync(join(shots, name), Buffer.from(data, "base64"));
+  } catch (e) { log("(снимок не сохранён: " + e.message + ")"); }
+};
+await shotControl("real-first-run.png");
 
 // ---- 1. connect with the real key + exit country ------------------------------------------
 const report = { connect: {}, sites: [] };
 // the key travels only inside this CDP message to the local control page, then the field is cleared
 await control.evaluate(`(() => { const t = document.getElementById('keyInput'); t.value = ${JSON.stringify(key)}; document.getElementById('remember').checked = false; document.getElementById('mainBtn').click(); return 1; })()`);
 key = "";
-const final = /^(Подключено|Выход не в нужной|Проверка показала|Подключение запущено, но|Компонент|Не подключено|Соединение прервано)/;
+const final = /^(Подключено через Россию|Выход не в России|Трафик идёт мимо|Не удалось подтвердить|Сервер недоступен|Соединение прервано|Подключение не запустилось)/;
 const t0 = Date.now();
 let st = "";
 while (Date.now() - t0 < 150000) {
   st = await $("statusLine", "textContent");
   const kerr = await $("keyError", "textContent");
   if (kerr) { st = "KEYERR " + kerr; break; }
+  if (!(await $("mainBtn", "disabled")) && /^Не подключено/.test(st) && Date.now() - t0 > 5000) { st = "KEYERR форма снова доступна без причины"; break; }
   if (final.test(st)) break;
   await sleep(500);
 }
-const exitRow = (await $("resExit", "innerText")).replace(/\s+/g, " ");
-const directRow = (await $("resDirect", "innerText")).replace(/\s+/g, " ");
+await shotControl("real-main-connected.png"); // details are closed: no addresses in the picture
+await control.evaluate("document.getElementById('details').open = true");
+const exitRow = "Выход этого окна " + (await $("resExit", "textContent")).replace(/\s+/g, " ");
+const directRow = "Обычное соединение (вне окна) " + (await $("resDirect", "textContent")).replace(/\s+/g, " ");
+await control.evaluate("document.getElementById('details').open = false");
 report.connect = { status: maskIp(st), exitRow: maskIp(exitRow), directRow: maskIp(directRow), seconds: Math.round((Date.now() - t0) / 1000) };
 const exitIp = (exitRow.match(/\b(\d{1,3}\.){3}\d{1,3}\b/) || [""])[0], directIp = (directRow.match(/\b(\d{1,3}\.){3}\d{1,3}\b/) || [""])[0];
 report.connect.exitDiffersFromOrdinary = !!exitIp && !!directIp && exitIp !== directIp;
-const connected = st.startsWith("Подключено");
+const connected = st.startsWith("Подключено через Россию");
 log("Подключение: " + st);
 log("  " + maskIp(exitRow) + " | " + maskIp(directRow) + " | выход отличается от обычного: " + report.connect.exitDiffersFromOrdinary);
 
@@ -107,9 +123,10 @@ log("  " + maskIp(exitRow) + " | " + maskIp(directRow) + " | выход отли
 if (!connected) {
   const d = {};
   if (st.startsWith("KEYERR")) d.layer = "ключ (формат): " + st.slice(7);
-  else if (/Компонент/.test(st)) d.layer = "ядро не запустилось (локально)";
-  else if (/Выход не в нужной/.test(st)) d.layer = "проверка страны: выход не в RU (" + maskIp(exitRow) + ")";
-  else if (/Проверка показала/.test(st)) d.layer = "проверка страны: адрес выхода совпал с обычным";
+  else if (/Подключение не запустилось/.test(st)) d.layer = "ядро не запустилось (локально)";
+  else if (/Сервер недоступен/.test(st)) d.layer = "сервер ключа не отвечает по TCP";
+  else if (/Выход не в России/.test(st)) d.layer = "проверка страны: выход не в RU (" + maskIp(exitRow) + ")";
+  else if (/Трафик идёт мимо/.test(st)) d.layer = "проверка страны: адрес выхода совпал с обычным";
   else {
     // the core runs; is the tunnel alive? is the probe service the problem?
     const alive = await control.evaluate("fetch('https://example.com/', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(15000) }).then(() => 'ok', () => 'fail')");
@@ -123,12 +140,22 @@ if (!connected) {
 // ---- 2. public pages ------------------------------------------------------------------------
 async function visit(site) {
   const r = { site: site.name, url: site.url };
-  const { targetId } = await browser.send("Target.createTarget", { url: "about:blank" });
+  // the real user path: click the tile; the launcher opens ONE new tab of this browser
+  const hostKey = new URL(site.url).hostname.replace(/^www\./, "");
+  const before = (await browser.send("Target.getTargets")).targetInfos.filter((t) => t.type === "page" && t.url.includes(hostKey)).length;
+  await control.evaluate(`document.querySelector('.tile[data-url="${site.url}"]').click()`);
+  let targetId = "";
+  for (let i = 0; i < 60 && !targetId; i++) {
+    const found = (await browser.send("Target.getTargets")).targetInfos.filter((t) => t.type === "page" && t.url.includes(hostKey));
+    if (found.length) targetId = found[0].targetId;
+    else await sleep(500);
+  }
+  r.tabsOpened = (await browser.send("Target.getTargets")).targetInfos.filter((t) => t.type === "page" && t.url.includes(hostKey)).length - before;
+  if (!targetId) { r.state = "ошибка"; r.error = "вкладка не открылась после клика по плитке"; r.navError = ""; return r; }
   const sid = await browser.attach(targetId);
   await browser.send("Runtime.enable", {}, sid); await browser.send("Page.enable", {}, sid);
   const ev = async (expression) => { const x = await browser.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sid); return x.result?.value; };
-  const nav = await browser.send("Page.navigate", { url: site.url }, sid).catch((e) => ({ errorText: e.message }));
-  r.navError = nav.errorText || "";
+  r.navError = "";
   const t1 = Date.now(); let complete = false;
   while (Date.now() - t1 < 70000) {
     const rs = await ev("document.readyState").catch(() => null);
@@ -176,7 +203,7 @@ await browser.send("Browser.close").catch(() => {});
 const code = await Promise.race([exited, sleep(25000).then(() => "timeout")]);
 const ps = async (script) => (await run("powershell", ["-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")])).stdout;
 await sleep(2000);
-const left = (await ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'sing-box.exe','RunetAccess.exe' -or ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*real-home*') } | Measure-Object | Select-Object -ExpandProperty Count")).trim();
+const left = (await ps("Get-CimInstance Win32_Process | Where-Object { ($_.ExecutablePath -like '*\runet-access\dist\*') -or ($_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*real-home*') } | Measure-Object | Select-Object -ExpandProperty Count")).trim();
 report.closing = { launcherExit: code === "timeout" ? "не завершился" : "завершился", ownedProcessesLeft: Number(left), lockLeft: existsSync(join(home, "run.lock")) };
 log("Закрытие окна: лаунчер " + report.closing.launcherExit + "; оставшихся процессов: " + left + "; блокировка осталась: " + report.closing.lockLeft);
 
@@ -186,7 +213,8 @@ log("Закрытие окна: лаунчер " + report.closing.launcherExit +
 log("Файл ключа не трогаю: он остаётся в .local\\secrets\\test-key.txt (удалите его сами, когда он больше не нужен).");
 rmSync(home, { recursive: true, force: true });
 report.keyFileDeleted = !existsSync(keyFile);
-log("Файл ключа на месте: " + !report.keyFileDeleted);
+report.keyFileUnchanged = sha(keyFile) === keyShaBefore;
+log("Файл ключа на месте: " + !report.keyFileDeleted + "; не изменён: " + report.keyFileUnchanged);
 writeFileSync(join(root, ".local", "logs", "real-check.json"), JSON.stringify(report, null, 2));
 console.log("\nИТОГ (без ключа и полного IP):");
 console.log("| Сайт | Открылся | Капча | Ошибка |\n|---|---|---|---|");

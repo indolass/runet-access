@@ -7,9 +7,11 @@
 
 const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]+:[0-9a-f:]+$/i;
 
-async function getJson(fetchImpl, url, timeoutMs) {
+async function getJson(fetchImpl, url, timeoutMs, outer) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  const onOuter = () => ctl.abort();
+  if (outer) { if (outer.aborted) ctl.abort(); else outer.addEventListener("abort", onOuter, { once: true }); }
   try {
     const r = await fetchImpl(url, {
       signal: ctl.signal,
@@ -20,6 +22,7 @@ async function getJson(fetchImpl, url, timeoutMs) {
     return await r.json();
   } finally {
     clearTimeout(timer);
+    if (outer) outer.removeEventListener("abort", onOuter);
   }
 }
 
@@ -37,13 +40,16 @@ function normalize(id, body) {
 }
 
 const reason = (e) => (e && e.name === "AbortError" ? "timeout" : (e && e.message) || "error");
+// The caller may pass an AbortSignal to cancel a check that has become obsolete; the result of
+// such a check is discarded by the caller, never shown.
 
 /** First proxied endpoint that answers sensibly wins. */
-export async function probeProxied(fetchImpl, cfg) {
+export async function probeProxied(fetchImpl, cfg, signal) {
   const errors = [];
   for (const ep of cfg.proxied) {
+    if (signal && signal.aborted) break;
     try {
-      return normalize(ep.id, await getJson(fetchImpl, ep.url, cfg.timeoutMs));
+      return normalize(ep.id, await getJson(fetchImpl, ep.url, cfg.timeoutMs, signal));
     } catch (e) {
       errors.push(ep.id + ": " + reason(e));
     }
@@ -51,9 +57,9 @@ export async function probeProxied(fetchImpl, cfg) {
   return { error: errors.join("; ") };
 }
 
-export async function probeDirect(fetchImpl, cfg) {
+export async function probeDirect(fetchImpl, cfg, signal) {
   try {
-    return normalize(cfg.direct.id, await getJson(fetchImpl, cfg.direct.url, cfg.timeoutMs));
+    return normalize(cfg.direct.id, await getJson(fetchImpl, cfg.direct.url, cfg.timeoutMs, signal));
   } catch (e) {
     return { error: reason(e) };
   }
@@ -67,8 +73,8 @@ export async function probeDirect(fetchImpl, cfg) {
  *   same-ip       proxied and ordinary addresses are identical -> traffic is NOT using the key
  *   unknown       the exit could not be determined
  */
-export async function runChecks({ fetchImpl, cfg }) {
-  const [proxied, direct] = await Promise.all([probeProxied(fetchImpl, cfg), probeDirect(fetchImpl, cfg)]);
+export async function runChecks({ fetchImpl, cfg, signal }) {
+  const [proxied, direct] = await Promise.all([probeProxied(fetchImpl, cfg, signal), probeDirect(fetchImpl, cfg, signal)]);
   let verdict;
   if (proxied.error) verdict = "unknown";
   else if (direct.ip && direct.ip === proxied.ip) verdict = "same-ip";

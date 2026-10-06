@@ -35,7 +35,7 @@ Copy-Item (Join-Path $L 'tools\sing-box\sing-box.exe') (Join-Path $Dist 'sing-bo
 # 4. licences, docs, hashes
 Copy-Item (Join-Path $RunetRoot 'third_party') (Join-Path $Dist 'third_party') -Recurse
 Copy-Item (Join-Path $RunetRoot 'LICENSE') (Join-Path $Dist 'LICENSE.txt')
-foreach ($d in 'INSTALL.md', 'MANUAL-CHECK.md', 'LIMITATIONS.md') {
+foreach ($d in 'INSTALL.md', 'MANUAL-CHECK.md', 'LIMITATIONS.md', 'UX.md') {
   $src = Join-Path $RunetRoot ('docs\' + $d)
   if (Test-Path $src) { Copy-Item $src $Dist }
 }

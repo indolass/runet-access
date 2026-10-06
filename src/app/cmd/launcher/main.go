@@ -15,10 +15,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +30,7 @@ import (
 	"runetaccess/internal/keyparse"
 )
 
-var version = "0.2.0-dev"
+var version = "0.3.0-dev"
 
 const (
 	phaseIdle       = "idle"
@@ -39,6 +41,8 @@ const (
 
 type app struct {
 	home      string
+	profile   string // the special browser's own profile directory
+	chrome    string
 	mgr       *core.Manager
 	store     keyStore
 	token     string
@@ -52,7 +56,21 @@ type app struct {
 	restarts int
 	closing  bool
 
+	gen        int    // bumped by every disconnect: an operation started earlier notices and stops
+	epoch      int    // bumped each time the core becomes ready: a verdict about an older one is void
+	confirmed  bool   // the exit country was verified for the current epoch (reported by the page)
+	restarting bool   // the core died and is being restarted: nothing can be verified right now
+	serverAddr string // host:port of the key's server, used only for the reachability test
+	curKey     string // key of the running attempt (memory only)
+	pendingKey string // a typed key waits for its verification: it is saved only after that
+	pendingRem bool
+	goodKey    string // last key that passed verification in this run (memory only)
+
+	browserDone  <-chan struct{} // closed when the special browser has exited
+	openExternal func(url string) error
+
 	probeOverride string // test-only: RUNET_PROBE_URL
+	recheckMs     int    // test-only: RUNET_RECHECK_MS
 	quit          sync.Once
 	releaseLock   func()
 }
@@ -88,8 +106,23 @@ func main() {
 		fatal("Не найден компонент подключения (sing-box). Переустановите Runet Access.")
 	}
 
-	a := &app{home: home, mgr: mgr, store: keyStore{path: filepath.Join(home, "key.dpapi")},
-		phase: phaseIdle, probeOverride: os.Getenv("RUNET_PROBE_URL"), releaseLock: release}
+	a := &app{home: home, chrome: chrome, profile: filepath.Join(home, "profile"), mgr: mgr,
+		store: keyStore{path: filepath.Join(home, "key.dpapi")}, phase: phaseIdle,
+		probeOverride: os.Getenv("RUNET_PROBE_URL"), releaseLock: release, openExternal: shellOpen}
+	if v, err := strconv.Atoi(os.Getenv("RUNET_RECHECK_MS")); err == nil && v >= 500 { // test only
+		a.recheckMs = v
+	}
+	if lf := os.Getenv("RUNET_OPEN_LOG"); lf != "" { // test only: record the link instead of opening it
+		a.openExternal = func(u string) error {
+			f, err := os.OpenFile(lf, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			_, err = fmt.Fprintln(f, u)
+			return err
+		}
+	}
 	tok := make([]byte, 16)
 	_, _ = rand.Read(tok)
 	a.token = hex.EncodeToString(tok)
@@ -115,9 +148,8 @@ func main() {
 	srv := &http.Server{Handler: a.routes(srvPort), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 
-	profile := filepath.Join(home, "profile")
-	_ = os.MkdirAll(profile, 0o700)
-	args := chromeArgs(profile, port, fmt.Sprintf("http://127.0.0.1:%d/?t=%s", srvPort, a.token))
+	_ = os.MkdirAll(a.profile, 0o700)
+	args := append(chromeArgs(a.profile, port), fmt.Sprintf("http://127.0.0.1:%d/?t=%s", srvPort, a.token))
 	cmd := exec.Command(chrome, args...)
 	if err := cmd.Start(); err != nil {
 		a.shutdown()
@@ -127,6 +159,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	done := make(chan struct{})
+	a.browserDone = done
 	go func() { _ = cmd.Wait(); close(done) }()
 	select {
 	case <-done: // last Chrome window closed
@@ -138,10 +171,10 @@ func main() {
 	a.shutdown()
 }
 
-// chromeArgs builds the dedicated-browser command line. Everything except loopback
-// (the control page) goes to the local proxy port; local DNS resolution is disabled so
-// no hostname lookup can leave through the direct connection.
-func chromeArgs(profileDir string, proxyPort int, startURL string) []string {
+// chromeArgs builds the dedicated-browser command line (without a start address). Everything
+// except loopback (the control page) goes to the local proxy port; local DNS resolution is
+// disabled so no hostname lookup can leave through the direct connection.
+func chromeArgs(profileDir string, proxyPort int) []string {
 	args := []string{
 		"--user-data-dir=" + profileDir,
 		fmt.Sprintf("--proxy-server=socks5://127.0.0.1:%d", proxyPort),
@@ -153,7 +186,7 @@ func chromeArgs(profileDir string, proxyPort int, startURL string) []string {
 	if extra := strings.Fields(os.Getenv("RUNET_CHROME_EXTRA_ARGS")); len(extra) > 0 { // test only
 		args = append(args, extra...)
 	}
-	return append(args, startURL)
+	return args
 }
 
 func findChrome() string {
@@ -209,38 +242,76 @@ func (a *app) closeGuard() {
 	}
 }
 
-// connect parses the key, starts the core and returns once its port accepts connections.
-func (a *app) connect(rawKey string, remember bool) (code, msg string) {
-	a.mu.Lock()
-	if a.phase == phaseConnecting || a.phase == phaseConnected {
-		a.mu.Unlock()
-		return "busy", "Уже подключено."
+// connect validates the key, starts the core and returns once its port accepts connections.
+// A key that merely looks wrong is refused before anything changes. Otherwise the previous
+// connection (if any) is stopped first, so an old connection can never pass for the new key.
+// A typed key is saved only later, by verdict(), after its exit has been verified.
+func (a *app) connect(rawKey string, remember bool) (epoch int, code, msg string) {
+	typed := strings.TrimSpace(rawKey)
+	key := typed
+	if key == "" {
+		if saved, err := a.store.load(); err == nil {
+			key = saved
+		}
+		if key == "" {
+			a.mu.Lock()
+			key = a.goodKey
+			a.mu.Unlock()
+		}
+		if key == "" {
+			return 0, "key", "Вставьте ключ подключения."
+		}
 	}
-	a.phase, a.errMsg = phaseConnecting, ""
-	a.mu.Unlock()
+	cfg, addr, perr := buildConfig(key, a.proxyPort)
+	if perr != nil {
+		return 0, "key", perr.Message
+	}
 
-	fail := func(code, msg string) (string, string) {
+	a.mu.Lock()
+	if a.phase == phaseConnecting {
+		a.mu.Unlock()
+		return 0, "busy", "Подключение уже выполняется."
+	}
+	wasUp := a.phase == phaseConnected
+	a.gen++
+	gen := a.gen
+	a.phase, a.errMsg, a.confirmed, a.cfg = phaseConnecting, "", false, nil
+	a.serverAddr, a.curKey = addr, key
+	a.pendingKey, a.pendingRem = "", false
+	if typed != "" {
+		a.pendingKey, a.pendingRem = typed, remember
+	}
+	a.mu.Unlock()
+	if wasUp {
+		_ = a.mgr.Stop()
+		a.reguard()
+	}
+
+	stale := func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.phase, a.errMsg = phaseError, msg
-		if code == "key" {
-			a.phase, a.errMsg = phaseIdle, ""
+		return a.gen != gen || a.closing
+	}
+	fail := func(code, msg string) (int, string, string) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.gen == gen {
+			a.phase, a.errMsg, a.pendingKey = phaseError, msg, ""
 		}
-		return code, msg
+		return 0, code, msg
 	}
 
-	typed := strings.TrimSpace(rawKey)
-	if typed == "" {
-		saved, err := a.store.load()
-		if err != nil || saved == "" {
-			return fail("key", "Вставьте ключ из Telegram.")
+	// Cheap and honest: when the server's port does not even answer, the core cannot work either.
+	c, err := net.DialTimeout("tcp", addr, 6*time.Second)
+	if err != nil {
+		if stale() {
+			return 0, "cancelled", ""
 		}
-		typed = saved
-		remember = false
+		return fail("server", "Сервер недоступен. Проверьте интернет и повторите попытку.")
 	}
-	cfg, perr := buildConfig(typed, a.proxyPort)
-	if perr != nil {
-		return fail("key", perr.Message)
+	_ = c.Close()
+	if stale() {
+		return 0, "cancelled", ""
 	}
 
 	a.mu.Lock()
@@ -253,15 +324,62 @@ func (a *app) connect(rawKey string, remember bool) (code, msg string) {
 	if err := a.mgr.WaitReady(a.proxyPort, 15*time.Second); err != nil {
 		_ = a.mgr.Stop()
 		a.reguard()
+		if stale() {
+			return 0, "cancelled", ""
+		}
 		return fail("core", "Компонент подключения не запустился. Перезапустите Runet Access.")
 	}
-	if remember {
-		_ = a.store.save(typed)
-	}
 	a.mu.Lock()
+	if a.gen != gen || a.closing {
+		a.mu.Unlock()
+		_ = a.mgr.Stop()
+		a.reguard()
+		return 0, "cancelled", ""
+	}
 	a.cfg, a.phase, a.errMsg, a.restarts = cfg, phaseConnected, "", 0
+	a.epoch++
+	epoch = a.epoch
 	a.mu.Unlock()
-	return "", ""
+	return epoch, "", ""
+}
+
+// verdict is the page's report on the exit check for a given epoch. A report about an older
+// epoch (the core was restarted since) or a closed connection is ignored. Only a positive
+// verdict lets a typed key be saved and makes sites openable.
+func (a *app) verdict(ok bool, epoch int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.phase != phaseConnected || epoch != a.epoch {
+		return
+	}
+	if !ok {
+		a.confirmed = false
+		return
+	}
+	a.confirmed = true
+	a.goodKey = a.curKey
+	if a.pendingKey != "" {
+		if a.pendingRem {
+			_ = a.store.save(a.pendingKey)
+		}
+		a.pendingKey = ""
+	}
+}
+
+// reachable reports whether the key's server accepts a TCP connection (diagnostics only).
+func (a *app) reachable() bool {
+	a.mu.Lock()
+	addr := a.serverAddr
+	a.mu.Unlock()
+	if addr == "" {
+		return false
+	}
+	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 func (a *app) reguard() {
@@ -273,9 +391,11 @@ func (a *app) reguard() {
 }
 
 // disconnect stops the core and puts the guard back: the window stays fail-closed.
+// It also cancels any connection attempt in progress.
 func (a *app) disconnect() {
 	a.mu.Lock()
-	a.phase, a.errMsg, a.cfg = phaseIdle, "", nil
+	a.gen++
+	a.phase, a.errMsg, a.cfg, a.confirmed, a.pendingKey, a.restarting = phaseIdle, "", nil, false, "", false
 	a.mu.Unlock()
 	_ = a.mgr.Stop()
 	a.reguard()
@@ -288,22 +408,108 @@ func (a *app) onCoreExit(err error) {
 		a.mu.Unlock()
 		return
 	}
-	cfg := a.cfg
+	cfg, gen := a.cfg, a.gen
+	// What was confirmed belonged to the process that has just died. A new epoch also voids any
+	// verdict still on its way from a check that began before the death.
+	a.confirmed = false
+	a.restarting = true
+	a.epoch++
 	a.restarts++
 	attempt := a.restarts
 	a.mu.Unlock()
+	a.reguard() // no gap in which the port is free for somebody else
 
 	if attempt <= 3 && cfg != nil {
 		time.Sleep(time.Duration(attempt) * 700 * time.Millisecond)
-		if e := a.mgr.Start(cfg, a.proxyPort); e == nil && a.mgr.WaitReady(a.proxyPort, 10*time.Second) == nil {
+		a.mu.Lock()
+		stale := a.gen != gen || a.closing
+		if !stale {
+			a.closeGuard()
+		}
+		a.mu.Unlock()
+		if stale {
 			return
 		}
+		if e := a.mgr.Start(cfg, a.proxyPort); e == nil && a.mgr.WaitReady(a.proxyPort, 10*time.Second) == nil {
+			a.mu.Lock()
+			if a.gen == gen && !a.closing {
+				a.restarting = false
+				a.epoch++ // the page verifies the exit of the NEW core
+				a.mu.Unlock()
+				return
+			}
+			a.mu.Unlock()
+			_ = a.mgr.Stop()
+			a.reguard()
+			return
+		}
+		_ = a.mgr.Stop()
 	}
 	a.mu.Lock()
-	a.phase, a.errMsg = phaseError, "Соединение прервано. Окно не выходит в интернет напрямую. Нажмите «Подключить» ещё раз."
+	if a.gen == gen {
+		a.phase, a.errMsg, a.restarting = phaseError, "Соединение прервано. Окно не выходит в интернет напрямую.", false
+	}
 	a.mu.Unlock()
-	_ = a.mgr.Stop()
 	a.reguard()
+}
+
+// openSite opens a page in a NEW TAB of the special browser by handing the address to the
+// browser that already runs on our profile. The window.open() route is not usable here: the
+// connection and the exit check take longer than the few seconds a click stays "fresh", and
+// Chrome then blocks the tab as a pop-up. The proxy flags travel along, so even if the browser
+// had just died the new one would still be fail-closed. Only after a verified exit.
+func (a *app) openSite(raw string) (code, msg string) {
+	a.mu.Lock()
+	ok := a.phase == phaseConnected && a.confirmed && !a.closing
+	a.mu.Unlock()
+	if !ok {
+		return "not-confirmed", "Подключение через Россию ещё не подтверждено."
+	}
+	u, bad := validSiteURL(raw)
+	if bad != "" {
+		return "url", bad
+	}
+	select {
+	case <-a.browserDone:
+		return "gone", "Окно браузера уже закрыто."
+	default:
+	}
+	cmd := exec.Command(a.chrome, append(chromeArgs(a.profile, a.proxyPort), u)...)
+	if err := cmd.Start(); err != nil {
+		return "launch", "Не удалось открыть вкладку."
+	}
+	go func() { _ = cmd.Wait() }() // the hand-over process exits at once
+	return "", ""
+}
+
+// validSiteURL accepts only a plain http(s) address of an outside host.
+func validSiteURL(raw string) (string, string) {
+	const msg = "Введите адрес сайта, например nalog.gov.ru."
+	s := strings.TrimSpace(raw)
+	if s == "" || len(s) > 2048 {
+		return "", msg
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Opaque != "" {
+		return "", msg
+	}
+	h := strings.ToLower(u.Hostname())
+	if h == "" || h == "localhost" || strings.HasSuffix(h, ".localhost") || !strings.Contains(h, ".") {
+		return "", msg
+	}
+	if ip := net.ParseIP(h); ip != nil && (ip.IsLoopback() || ip.IsUnspecified()) {
+		return "", msg
+	}
+	return u.String(), ""
+}
+
+// externalLinks is the whole list of addresses the page may ask us to open outside the special
+// browser (the window cannot reach them before it is connected). The page sends an id, never an
+// address, so this is not a way to open anything else.
+var externalLinks = map[string]string{
+	"bot-ussr":  "https://t.me/BackInTheUSSR_bot",
+	"bot-hlvpn": "https://t.me/hlvpnbot",
+	"thanks":    "https://t.me/W3_accelerators_GK",
 }
 
 func (a *app) shutdown() {
@@ -320,15 +526,16 @@ func (a *app) shutdown() {
 	})
 }
 
-// buildConfig validates the key and returns the core config for the given local port.
-func buildConfig(key string, port int) ([]byte, *keyparse.Error) {
+// buildConfig validates the key and returns the core config for the given local port and the
+// server's host:port (for the reachability test only; it is never shown or logged).
+func buildConfig(key string, port int) ([]byte, string, *keyparse.Error) {
 	p, kerr := keyparse.Parse(key)
 	if kerr != nil {
-		return nil, kerr
+		return nil, "", kerr
 	}
 	cfg, err := config.Build(p, config.Inbound{Listen: "127.0.0.1", Port: port}, config.Routing{Final: "proxy"}, "warn")
 	if err != nil {
-		return nil, &keyparse.Error{Code: "config", Message: "Ключ не удалось применить. Проверьте, что он скопирован целиком."}
+		return nil, "", &keyparse.Error{Code: "config", Message: "Ключ не удалось применить. Проверьте, что он скопирован целиком."}
 	}
-	return cfg, nil
+	return cfg, net.JoinHostPort(p.Server, strconv.Itoa(p.Port)), nil
 }

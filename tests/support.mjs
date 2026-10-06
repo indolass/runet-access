@@ -19,22 +19,27 @@ const sb = (...args) => spawnSync(serverBox, args, { encoding: "utf8" }).stdout.
 
 /** Country-check mock. state.country / state.ip are changed by the test at will. */
 export async function startMock() {
-  const state = { country: "RU", ip: "203.0.113.77", hits: 0 };
+  const state = { country: "RU", ip: "203.0.113.77", hits: 0, delayMs: 0, fail: false };
   const server = http.createServer((req, res) => {
     state.hits++;
-    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ ip: state.ip, country: state.country }));
+    const answer = () => {
+      if (state.fail) { res.writeHead(503, { "access-control-allow-origin": "*" }); res.end("down"); return; }
+      res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+      res.end(JSON.stringify({ ip: state.ip, country: state.country }));
+    };
+    if (state.delayMs > 0) setTimeout(answer, state.delayMs); else answer();
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   return { state, port: server.address().port, close: () => server.close() };
 }
 
 /** Synthetic server. The host MOCK_HOST is redirected to the local mock (so the mock answers only through the tunnel). */
-export async function startSyntheticServer(mockPort) {
-  const uuid = sb("generate", "uuid");
-  const kp = Object.fromEntries(sb("generate", "reality-keypair").split(/\r?\n/).map((l) => l.split(/:\s*/)));
-  const sid = sb("generate", "rand", "--hex", "8");
-  const port = await freePort();
+export async function startSyntheticServer(mockPort, reuse) {
+  // `reuse` = a previous server's credentials: restarts the SAME server (same key, same port)
+  const uuid = reuse ? reuse.uuid : sb("generate", "uuid");
+  const kp = reuse ? reuse.kp : Object.fromEntries(sb("generate", "reality-keypair").split(/\r?\n/).map((l) => l.split(/:\s*/)));
+  const sid = reuse ? reuse.sid : sb("generate", "rand", "--hex", "8");
+  const port = reuse ? reuse.port : await freePort();
   const dir = mkdtempSync(join(process.env.TEMP, "synth-"));
   const cfg = join(dir, "server.json");
   writeFileSync(cfg, JSON.stringify({
@@ -55,7 +60,7 @@ export async function startSyntheticServer(mockPort) {
   if (!(await until(() => portOpen(port), 8000))) throw new Error("synthetic server did not start: " + h.log.slice(0, 400));
   const key = `vless://${uuid}@127.0.0.1:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${MASK}&fp=chrome&pbk=${kp.PublicKey}&sid=${sid}&type=tcp#synthetic`;
   return {
-    key, uuid, port, h, proc,
+    key, uuid, port, h, proc, creds: { uuid, kp, sid, port },
     stop() { proc.kill(); },
     cleanup() { try { rmSync(dir, { recursive: true, force: true }); } catch {} },
   };
