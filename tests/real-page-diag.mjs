@@ -15,14 +15,14 @@ const url = process.argv[2];
 if (!/^https:\/\/[a-z0-9.-]+\//i.test(url || "")) { console.log("usage: node tests/real-page-diag.mjs https://host/"); process.exit(2); }
 const exe = join(root, "dist", "runet-access", "RunetAccess.exe");
 const home = join(root, ".local", "diag-home");
-const keyFile = join(root, ".local", "secrets", "test-key.txt");
+const keyFile = process.env.RUNET_KEY_FILE ? join(root, process.env.RUNET_KEY_FILE) : join(root, ".local", "secrets", "test-key.txt"); // RUNET_KEY_FILE: another file under the repo root
 const shots = join(root, ".local", "logs", "shots"); mkdirSync(shots, { recursive: true });
 const maskIp = (s) => String(s).replace(/\b(\d{1,3})(\.\d{1,3}){3}\b/g, "$1.x.x.x");
 const log = (s) => console.log(maskIp(s));
 process.on("unhandledRejection", (e) => { log("FATAL " + (e && e.message)); process.exit(1); });
 
 let key = readFileSync(keyFile, "utf8").trim();
-if (!/^vless:\/\/\S+$/i.test(key.split("#")[0])) { log("в файле ключа нет одной строки vless://"); process.exit(2); }
+if (!/^(vless|ss|ssconf):\/\/\S+$/i.test(key.split("#")[0])) { log("в файле ключа нет одной строки vless://, ss:// или ssconf://"); process.exit(2); }
 rmSync(home, { recursive: true, force: true });
 const port = await new Promise((res) => { const s = net.createServer().listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); });
 const child = spawn(exe, [], { stdio: "ignore", env: { ...process.env, RUNET_TEST_MODE: "1", RUNET_ACCESS_HOME: home, RUNET_CHROME_EXTRA_ARGS: `--remote-debugging-port=${port}`, RUNET_NO_DIALOG: "1" } });
@@ -57,7 +57,9 @@ if (st.startsWith("Подключено")) {
   });
   for (const d of ["Network", "Page", "Runtime", "Log"]) await browser.send(d + ".enable", {}, sid);
   const ev = async (e) => (await browser.send("Runtime.evaluate", { expression: e, returnByValue: true, awaitPromise: true }, sid)).result?.value;
-  await browser.send("Page.navigate", { url }, sid);
+  // not awaited: when the site never answers, Page.navigate itself takes longer than the 30 s CDP timeout
+  const navT0 = Date.now(); let navResult = "pending";
+  browser.send("Page.navigate", { url }, sid).then((r) => { navResult = r && r.errorText ? "errorText=" + r.errorText : "committed"; }, (e) => { navResult = "no answer: " + e.message; });
   const series = [];
   for (let i = 0; i < 16; i++) { await sleep(5000); series.push(await ev("document.body ? document.body.innerText.length : -1").catch(() => -1)); if (i >= 3 && series.at(-1) === series.at(-2) && series.at(-1) === series.at(-3) && series.at(-1) > 400) break; }
   const dom = JSON.parse(await ev(`JSON.stringify((() => {
@@ -70,6 +72,7 @@ if (st.startsWith("Подключено")) {
   try { const { data } = await browser.send("Page.captureScreenshot", { format: "png" }, sid); writeFileSync(join(shots, "diag-" + new URL(url).hostname + ".png"), Buffer.from(data, "base64")); } catch {}
   const failedBy = {}; for (const f of failed) { const k2 = `${f.host} ${f.type} ${f.error}${f.blocked ? " blocked=" + f.blocked : ""}`; failedBy[k2] = (failedBy[k2] || 0) + 1; }
   report = { ...report, main, hosts, failed: failedBy, consoleErr: [...new Set(consoleErr)].slice(0, 8), textSeries: series, dom };
+  log(`Page.navigate: ${navResult} (${Math.round((Date.now() - navT0) / 1000)} с после старта)`);
   log(`основной документ: ${main ? `${main.host} HTTP ${main.status} (${main.mime})` : "ответа не было"}`);
   log("ответы по хостам (код: число): " + Object.entries(hosts).map(([h, c]) => `${h} {${Object.entries(c).map(([k3, v]) => k3 + ":" + v).join(", ")}}`).join("; "));
   log("сбои загрузки: " + (Object.keys(failedBy).length ? Object.entries(failedBy).map(([k3, v]) => `${k3} ×${v}`).join("; ") : "нет"));

@@ -34,10 +34,10 @@ const step = async (name, fn) => { try { await fn(); passed++; console.log("PASS
 
 const ps = async (script) => (await run("powershell", ["-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { maxBuffer: 1 << 24 })).stdout;
 async function ours() {
-  const out = await ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'sing-box.exe','RunetAccess.exe','chrome.exe' } | Select-Object Name,ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress");
+  const out = await ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'RunetAccess*.exe' -or $_.Name -in 'sing-box.exe','chrome.exe' } | Select-Object Name,ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress");
   if (!out.trim()) return [];
   const j = JSON.parse(out); const all = Array.isArray(j) ? j : [j];
-  return all.filter((p) => ((p.ExecutablePath || "").toLowerCase().startsWith(exeDir.toLowerCase())) || (p.Name === "chrome.exe" && (p.CommandLine || "").toLowerCase().includes(home.toLowerCase())));
+  return all.filter((p) => ((p.ExecutablePath || "").toLowerCase().startsWith(exeDir.toLowerCase())) || ((p.ExecutablePath || "").toLowerCase().startsWith(home.toLowerCase())) || (p.Name === "chrome.exe" && (p.CommandLine || "").toLowerCase().includes(home.toLowerCase())));
 }
 const cores = async () => (await ours()).filter((p) => p.Name === "sing-box.exe");
 const sysProxy = async () => (await run("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"])).stdout.split(/\r?\n/).filter((l) => /Proxy|AutoConfig|AutoDetect/i.test(l)).sort().join("|");

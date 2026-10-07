@@ -35,6 +35,9 @@ import (
 
 var version = "0.3.0-dev"
 
+// portableHold keeps the unpacked core of the portable build open (no write/delete sharing) for the whole run.
+var portableHold *os.File
+
 // maxKeyChars is the longest text accepted as a key. Real keys (vless://, ss://, ssconf://) are well
 // under 2 000 characters; the limit only separates "a key" from "a pasted message" for a plain error.
 const maxKeyChars = 8192
@@ -95,6 +98,9 @@ func main() {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		fatal("Не удалось создать рабочую папку: " + err.Error())
 	}
+	if portableCommand(home, os.Args, openerFromEnv()) { // "--licenses" of the portable build; needs no lock
+		return
+	}
 	release, err := acquireLock(filepath.Join(home, "run.lock"))
 	if err != nil {
 		fatal("Runet Access уже запущен.")
@@ -111,7 +117,20 @@ func main() {
 
 	// Anything the core spawns dies with us, however we die.
 	_ = core.ConfineChildren()
-	mgr, err := core.NewManager()
+	var mgr *core.Manager
+	if portableBuild {
+		// One-file build: unpack/verify the core into the program's data folder and keep it locked against changes
+		// until the program ends (portableHold is never closed on purpose; Windows releases it with the process).
+		hold, corePath, perr := preparePortable(home)
+		if perr != nil {
+			release()
+			fatal("Не удалось подготовить компоненты программы: " + perr.Error())
+		}
+		portableHold = hold
+		mgr, err = core.NewManagerAt(corePath)
+	} else {
+		mgr, err = core.NewManager()
+	}
 	if err != nil {
 		release()
 		fatal("Не найден компонент подключения (sing-box). Переустановите Runet Access.")

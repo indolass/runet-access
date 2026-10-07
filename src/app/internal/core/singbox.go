@@ -62,7 +62,23 @@ func NewManager() (*Manager, error) {
 	if bin == "" {
 		return nil, fmt.Errorf("sing-box binary not found near %s", dir)
 	}
+	return newManager(bin)
+}
 
+// NewManagerAt uses the sing-box binary at an explicit path (the portable build keeps it in the program's own
+// data folder, verified, instead of next to the exe).
+func NewManagerAt(bin string) (*Manager, error) {
+	abs, err := filepath.Abs(bin)
+	if err != nil {
+		return nil, err
+	}
+	if st, err := os.Stat(abs); err != nil || st.IsDir() {
+		return nil, fmt.Errorf("sing-box binary not found")
+	}
+	return newManager(abs)
+}
+
+func newManager(bin string) (*Manager, error) {
 	// Свой каталог на процесс. Общий %TEMP%\magicproxy\config.json давал гонку:
 	// хосты двух профилей браузера затирали конфиги друг друга. Заодно каждый
 	// хост убирает за собой ровно свой каталог (см. Cleanup) — конфиг с паролями

@@ -38,10 +38,10 @@ const step = async (name, fn) => { try { await fn(); passed++; console.log("PASS
 
 const ps = async (script) => (await run("powershell", ["-NoProfile", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { maxBuffer: 1 << 24 })).stdout;
 async function ours() {
-  const out = await ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'sing-box.exe','RunetAccess.exe','chrome.exe' } | Select-Object Name,ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress");
+  const out = await ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'RunetAccess*.exe' -or $_.Name -in 'sing-box.exe','chrome.exe' } | Select-Object Name,ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress");
   if (!out.trim()) return [];
   const j = JSON.parse(out); const all = Array.isArray(j) ? j : [j];
-  return all.filter((p) => ((p.ExecutablePath || "").toLowerCase().startsWith(exeDir.toLowerCase())) || (p.Name === "chrome.exe" && (p.CommandLine || "").toLowerCase().includes(home.toLowerCase())));
+  return all.filter((p) => ((p.ExecutablePath || "").toLowerCase().startsWith(exeDir.toLowerCase())) || ((p.ExecutablePath || "").toLowerCase().startsWith(home.toLowerCase())) || (p.Name === "chrome.exe" && (p.CommandLine || "").toLowerCase().includes(home.toLowerCase())));
 }
 const cores = async () => (await ours()).filter((p) => p.Name === "sing-box.exe");
 const sysProxy = async () => (await run("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"])).stdout.split(/\r?\n/).filter((l) => /Proxy|AutoConfig|AutoDetect/i.test(l)).sort().join("|");
@@ -149,7 +149,7 @@ try {
 
   await step("no extra process: exactly one core and nothing else of ours besides Chrome; the config with the secrets is not on disk", async () => {
     const names = (await ours()).map((p) => p.Name);
-    assert.deepEqual([...new Set(names)].sort(), ["RunetAccess.exe", "chrome.exe", "sing-box.exe"]);
+    assert.deepEqual([...new Set(names.map((n) => (n.startsWith("RunetAccess") ? "RunetAccess.exe" : n)))].sort(), ["RunetAccess.exe", "chrome.exe", "sing-box.exe"]);
     assert.equal((await cores()).length, 1);
     const tmp = join(process.env.TEMP, "runet-access");
     if (existsSync(tmp)) for (const d of readdirSync(tmp)) assert.ok(!existsSync(join(tmp, d, "config.json")), "config.json is still on disk in " + d);
@@ -165,7 +165,7 @@ try {
   const failing = [
     ["no prefix at all", () => staticKey(null)],
     ["a wrong prefix", () => staticKey([0x47, 0x45, 0x54, 0x20, 0x2f])],
-    ["the right start but one byte too short (the stand wants all 7)", () => staticKey(PREFIX.slice(0, 6))],
+    ["the right start but the LAST byte wrong (a prefix one byte too short would pass by chance 1 time in 256: the 7th salt byte is random)", () => staticKey([...PREFIX.slice(0, 6), 0x02])],
     ["the right prefix but a wrong password", () => staticKey(PREFIX, front.port, "not-the-password")],
   ];
   for (const [name, key] of failing) {
